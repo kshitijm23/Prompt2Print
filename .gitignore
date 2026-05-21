@@ -22,3 +22,9 @@ dist/
 # OS / editor
 .DS_Store
 .vscode/
+backend/test.pdf
+backend/body.json
+backend/out.pdf
+
+backend/gen.json
+backend/worksheet.pdf

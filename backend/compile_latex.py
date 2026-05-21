@@ -33,7 +33,7 @@ def compile_latex(source: str) -> CompileResult:
                 ],
                 cwd=work,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=COMPILE_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
@@ -64,4 +64,5 @@ Hello from Prompt2Print.
     else:
         print("FAILED - last log lines:")
         print("\n".join(result.log.splitlines()[-10:]))
+
 

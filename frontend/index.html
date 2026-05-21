@@ -1,0 +1,35 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prompt2Print</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Prompt2Print</h1>
+      <p class="tagline">Describe your worksheet. Get a polished PDF.</p>
+    </header>
+
+    <main>
+      <textarea
+        id="prompt"
+        placeholder="e.g. A grade 5 worksheet on adding fractions, 5 questions, with a visual bar model and colorful question boxes."
+        rows="4"></textarea>
+
+      <button id="generate-btn">Generate Worksheet</button>
+
+      <p id="status" class="status"></p>
+
+      <div id="preview" class="preview hidden">
+        <iframe id="pdf-frame" title="Worksheet preview"></iframe>
+        <a id="download-link" class="download-link" download="worksheet.pdf">Download PDF</a>
+      </div>
+    </main>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
