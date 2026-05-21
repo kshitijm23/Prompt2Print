@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()  # reads ANTHROPIC_API_KEY from the .env file
 
 _client = Anthropic()  # picks up the key from the environment
-_MODEL = "claude-sonnet-4-6"
+_MODEL = "claude-opus-4-7"
 
 # The fixed, known-good preamble. Claude fills the body; we control the rest.
 _SYSTEM_PROMPT = r"""You are a worksheet-generating engine for teachers.
@@ -82,3 +82,35 @@ def fix_latex(broken_latex: str, error_log: str) -> str:
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
+
+# A deliberately minimal preamble that is extremely unlikely to fail.
+_FALLBACK_SYSTEM_PROMPT = r"""You are a worksheet-generating engine for teachers.
+Output ONLY valid, compilable LaTeX, no markdown fences, no commentary.
+Use ONLY this minimal, safe setup. Do NOT use tikz, pgfplots, or tcolorbox.
+
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{enumitem}
+
+Rules:
+- Plain, clean formatting. Use \section* for question groupings.
+- Use simple enumerate lists for questions.
+- Keep all math in proper LaTeX math mode.
+- NO graphics packages of any kind. Text and math only.
+- Output the FULL document from \documentclass to \end{document}.
+"""
+
+
+def generate_fallback_latex(prompt: str) -> str:
+    """Generate a plain, graphics-free worksheet that is very likely to compile."""
+    message = _client.messages.create(
+        model=_MODEL,
+        max_tokens=4000,
+        system=_FALLBACK_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(
+        block.text for block in message.content if block.type == "text"
+    ).strip()
+
