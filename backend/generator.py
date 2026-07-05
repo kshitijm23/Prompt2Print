@@ -142,3 +142,69 @@ def edit_latex(existing_latex: str, edit_instruction: str) -> str:
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
+
+
+_REFERENCE_SYSTEM_PROMPT = """You are a worksheet-generating engine for teachers.
+You will receive:
+1. A REFERENCE document (PDF or image) — an existing worksheet the teacher likes.
+2. A NEW PROMPT describing the worksheet they want you to make.
+
+Study the reference to understand its STRUCTURE and PEDAGOGY:
+- Number and type of questions (MCQ, open-ended, fill-in, word problems, etc.)
+- Topic and grade level
+- Layout style (single column, boxed sections, etc.)
+- Tone and difficulty
+
+Then generate a NEW worksheet that follows the teacher's prompt but is
+STRUCTURALLY SIMILAR to the reference. Do NOT copy the reference's exact
+problems or wording. Match its shape, not its content.
+
+Output ONLY compilable LaTeX, no commentary, no markdown fences.
+Use the standard worksheet preamble with tcolorbox, tikz, xcolor, amsmath, etc.
+Wrap questions in questionbox environments and use tipbox for hints.
+"""
+
+
+def generate_from_reference(file_bytes: bytes, media_type: str, prompt: str) -> str:
+    """Generate worksheet LaTeX from a reference file (PDF or image) plus a teacher prompt."""
+    import base64 as _b64
+    file_b64 = _b64.b64encode(file_bytes).decode("ascii")
+
+    # Pick the right content-block shape based on file type.
+    is_pdf = media_type == "application/pdf"
+    if is_pdf:
+        reference_block = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": file_b64,
+            },
+        }
+    else:
+        reference_block = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": file_b64,
+            },
+        }
+
+    message = _client.messages.create(
+        model=_MODEL,
+        max_tokens=4000,
+        system=_REFERENCE_SYSTEM_PROMPT,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    reference_block,
+                    {"type": "text", "text": "NEW PROMPT: " + prompt},
+                ],
+            }
+        ],
+    )
+    return "".join(
+        block.text for block in message.content if block.type == "text"
+    ).strip()

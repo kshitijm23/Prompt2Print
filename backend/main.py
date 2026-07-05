@@ -4,13 +4,14 @@ import base64
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from compile_latex import compile_latex
 from generator import (
     generate_latex, fix_latex, generate_fallback_latex, edit_latex,
+    generate_from_reference,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -119,6 +120,46 @@ def edit_endpoint(req: EditRequest):
 
     return Response(
         content="Could not apply that edit. Try rephrasing.",
+        media_type="text/plain",
+        status_code=422,
+    )
+
+
+@app.post("/generate-from-reference")
+async def generate_from_reference_endpoint(
+    prompt: str = Form(...),
+    reference: UploadFile = File(...),
+):
+    """Generate a worksheet using an uploaded reference PDF for structural guidance."""
+    log.info("Generating from reference: %s", reference.filename)
+    file_bytes = await reference.read()
+
+    latex = generate_from_reference(file_bytes, reference.content_type or "application/pdf", prompt)
+    result = compile_latex(latex)
+
+    attempts = 0
+    while not (result.ok and result.pdf_bytes) and attempts < MAX_FIX_ATTEMPTS:
+        error_log = "\n".join(result.log.splitlines()[-25:])
+        latex = fix_latex(latex, error_log)
+        result = compile_latex(latex)
+        attempts += 1
+
+    if result.ok and result.pdf_bytes:
+        return _pdf_response_full(result.pdf_bytes, "rich", latex)
+
+    # Fallback path
+    fallback_latex = generate_fallback_latex(prompt)
+    fb_result = compile_latex(fallback_latex)
+    if not (fb_result.ok and fb_result.pdf_bytes):
+        error_log = "\n".join(fb_result.log.splitlines()[-25:])
+        fallback_latex = fix_latex(fallback_latex, error_log)
+        fb_result = compile_latex(fallback_latex)
+
+    if fb_result.ok and fb_result.pdf_bytes:
+        return _pdf_response_full(fb_result.pdf_bytes, "fallback", fallback_latex)
+
+    return Response(
+        content="Could not generate a worksheet from that reference.",
         media_type="text/plain",
         status_code=422,
     )

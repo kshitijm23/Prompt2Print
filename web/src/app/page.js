@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-const API_URL = "http://127.0.0.1:8000";
 
 const EXAMPLES = [
   "Grade 5 worksheet on adding fractions with bar models",
@@ -17,14 +15,34 @@ const EXAMPLES = [
 export default function Home() {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [status, setStatus] = useState("");
-  const [pdfUrl, setPdfUrl] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [referenceFile, setReferenceFile] = useState(null);
+  const fileInputRef = useRef(null);
 
-  function generateWorksheet() {
+  function handleFileChange(e) {
+    const file = e.target.files?.[0];
+    if (file) setReferenceFile(file);
+  }
+
+  async function generateWorksheet() {
     const toUse = prompt.trim();
     if (!toUse) return;
+
+    if (referenceFile) {
+      // Store the file in sessionStorage as base64 for the worksheet page to pick up
+      const buffer = await referenceFile.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const b64 = btoa(binary);
+      sessionStorage.setItem("p2p-ref-b64", b64);
+      sessionStorage.setItem("p2p-ref-name", referenceFile.name);
+      sessionStorage.setItem("p2p-ref-type", referenceFile.type);
+    } else {
+      sessionStorage.removeItem("p2p-ref-b64");
+      sessionStorage.removeItem("p2p-ref-name");
+      sessionStorage.removeItem("p2p-ref-type");
+    }
     router.push("/worksheet?p=" + encodeURIComponent(toUse));
   }
 
@@ -100,8 +118,43 @@ export default function Home() {
             </p>
           </div>
 
+          {/* Reference upload row */}
+          <div className="px-8 mt-4">
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="application/pdf,image/png,image/jpeg,image/webp,image/gif"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            {referenceFile ? (
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 w-fit">
+                <div className="h-2 w-2 rounded-full bg-blue-500" />
+                <span className="font-mono text-xs text-slate-700">
+                  reference: {referenceFile.name}
+                </span>
+                <button
+                  onClick={() => {
+                    setReferenceFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
+                  className="text-slate-400 hover:text-slate-900 text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="font-mono text-xs text-slate-500 hover:text-slate-900 underline underline-offset-4 transition"
+              >
+                + attach a reference (PDF or image, optional)
+              </button>
+            )}
+          </div>
+
           {/* Divider */}
-          <div className="mt-6 border-t border-slate-100" />
+          <div className="mt-5 border-t border-slate-100" />
 
           {/* row: examples + generate btn */}
           <div className="flex flex-col gap-4 px-8 py-5">
@@ -119,46 +172,12 @@ export default function Home() {
             </div>
             <Button
               onClick={generateWorksheet}
-              disabled={isGenerating}
               size="lg"
               className="w-full h-[52px] text-base font-medium bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
             >
-              {isGenerating ? "Generating…" : "Generate worksheet →"}
+              Generate worksheet →
             </Button>
-            {status && (
-              <p className="text-center text-slate-500 text-sm font-mono">{status}</p>
-            )}
           </div>
-        </div>
-
-        {/* Preview */}
-        <div className="mt-12">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full bg-slate-300" />
-              <p className="font-mono text-[11px] tracking-wider text-slate-600 uppercase">Preview</p>
-            </div>
-            {pdfUrl && (
-              <a
-                href={pdfUrl}
-                download="worksheet.pdf"
-                className="font-mono text-xs text-slate-900 underline underline-offset-4 hover:text-slate-600 transition"
-              >
-                download pdf →
-              </a>
-            )}
-          </div>
-          {pdfUrl ? (
-            <iframe
-              src={pdfUrl}
-              className="w-full h-[700px] border border-slate-200 rounded-lg bg-white"
-              title="Worksheet preview"
-            />
-          ) : (
-            <div className="h-[360px] border border-dashed border-slate-300 rounded-lg flex items-center justify-center bg-[color:#FEFEFA]">
-              <p className="font-mono text-sm text-slate-400">your worksheet will appear here</p>
-            </div>
-          )}
         </div>
 
         {/* small footer */}

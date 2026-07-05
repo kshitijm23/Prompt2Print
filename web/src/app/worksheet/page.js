@@ -50,11 +50,38 @@ export default function Worksheet() {
     }
     (async () => {
       try {
-        const response = await fetch(`${API_URL}/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt }),
-        });
+        const refB64 = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-b64") : null;
+        const refName = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : null;
+        const refType = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-type") : null;
+
+        let response;
+        if (refB64 && refName) {
+          // Reference-based generation via multipart form
+          const bin = atob(refB64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: refType || "application/pdf" });
+          const form = new FormData();
+          form.append("prompt", prompt);
+          form.append("reference", blob, refName);
+
+          setStatus("Reading your reference and generating...");
+          response = await fetch(`${API_URL}/generate-from-reference`, {
+            method: "POST",
+            body: form,
+          });
+
+          // Clear the stashed reference so it doesn't persist
+          sessionStorage.removeItem("p2p-ref-b64");
+          sessionStorage.removeItem("p2p-ref-name");
+          sessionStorage.removeItem("p2p-ref-type");
+        } else {
+          response = await fetch(`${API_URL}/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt }),
+          });
+        }
         if (!response.ok) {
           setStatus("Couldn’t generate that one. Go back and try rephrasing.");
           return;
