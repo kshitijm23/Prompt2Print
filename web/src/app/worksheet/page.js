@@ -5,17 +5,44 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
+const API_URL = "http://127.0.0.1:8000";
+
 export default function Worksheet() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const prompt = searchParams.get("p") || "";
 
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [latex, setLatex] = useState("");
   const [status, setStatus] = useState("Preparing your worksheet.…");
   const [isGenerating, setIsGenerating] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
   const [editNote, setEditNote] = useState("");
+  const [editError, setEditError] = useState("");
 
-  // Kick off generation on mount using the prompt from the URL.
+  async function consumePdfResponse(response) {
+    const b64 = response.headers.get("X-Latex-B64");
+    if (b64) {
+      try {
+        const decoded = decodeURIComponent(
+          atob(b64)
+            .split("")
+            .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+            .join("")
+        );
+        setLatex(decoded);
+      } catch {
+        // if decoding fails, just skip; PDF still works
+      }
+    }
+    const blob = await response.blob();
+    setPdfUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(blob);
+    });
+  }
+
+  // Initial generation
   useEffect(() => {
     if (!prompt) {
       router.push("/");
@@ -23,7 +50,7 @@ export default function Worksheet() {
     }
     (async () => {
       try {
-        const response = await fetch("http://127.0.0.1:8000/generate", {
+        const response = await fetch(`${API_URL}/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt }),
@@ -32,8 +59,7 @@ export default function Worksheet() {
           setStatus("Couldn’t generate that one. Go back and try rephrasing.");
           return;
         }
-        const blob = await response.blob();
-        setPdfUrl(URL.createObjectURL(blob));
+        await consumePdfResponse(response);
         setStatus("");
       } catch (err) {
         setStatus("Can’t reach the server. Is the backend running?");
@@ -43,6 +69,30 @@ export default function Worksheet() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function applyEdit() {
+    const instruction = editNote.trim();
+    if (!instruction || !latex) return;
+    setIsEditing(true);
+    setEditError("");
+    try {
+      const response = await fetch(`${API_URL}/edit-worksheet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ latex, instruction }),
+      });
+      if (!response.ok) {
+        setEditError("Couldn’t apply that edit. Try rephrasing.");
+        return;
+      }
+      await consumePdfResponse(response);
+      setEditNote("");
+    } catch {
+      setEditError("Can’t reach the server.");
+    } finally {
+      setIsEditing(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[color:#FAFAF6]">
@@ -75,22 +125,30 @@ export default function Worksheet() {
         </div>
       </div>
 
-      {/* Layout B: split view */}
+      {/* Layout B */}
       <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
           {/* MAIN: PDF */}
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)] overflow-hidden">
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)] overflow-hidden relative">
             {isGenerating ? (
               <div className="h-[800px] flex flex-col items-center justify-center gap-4">
                 <div className="h-10 w-10 rounded-full border-2 border-slate-200 border-t-slate-900 animate-spin" />
                 <p className="font-mono text-sm text-slate-500">{status}</p>
               </div>
             ) : pdfUrl ? (
-              <iframe
-                src={pdfUrl}
-                className="w-full h-[800px] border-0 bg-white"
-                title="Worksheet"
-              />
+              <>
+                <iframe
+                  src={pdfUrl}
+                  className="w-full h-[800px] border-0 bg-white"
+                  title="Worksheet"
+                />
+                {isEditing && (
+                  <div className="absolute inset-0 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
+                    <div className="h-10 w-10 rounded-full border-2 border-slate-200 border-t-slate-900 animate-spin" />
+                    <p className="font-mono text-sm text-slate-600">applying your edit…</p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="h-[800px] flex items-center justify-center">
                 <p className="font-mono text-sm text-slate-500">{status}</p>
@@ -98,7 +156,7 @@ export default function Worksheet() {
             )}
           </div>
 
-          {/* SIDEBAR: prompt + actions + edit placeholder */}
+          {/* SIDEBAR */}
           <div className="flex flex-col gap-4">
             {/* The original prompt */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -109,33 +167,37 @@ export default function Worksheet() {
               <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">{prompt}</p>
             </div>
 
-            {/* Edit-with-AI (coming soon) */}
+            {/* Edit-with-AI */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">
-                <div className="h-2 w-2 rounded-full bg-slate-300" />
+                <div className="h-2 w-2 rounded-full bg-blue-500" />
                 <p className="font-mono text-[11px] tracking-wider text-slate-600 uppercase">edit with AI</p>
               </div>
               <Textarea
                 value={editNote}
                 onChange={(e) => setEditNote(e.target.value)}
-                placeholder="e.g. make question 3 harder, add a word bank..."
+                placeholder="e.g. make question 3 harder, add a word bank"
                 rows={3}
+                disabled={isEditing || isGenerating || !latex}
                 className="text-sm resize-none"
-                disabled
               />
               <Button
-                disabled
-                className="w-full mt-3 bg-slate-100 text-slate-400 cursor-not-allowed hover:bg-slate-100"
+                onClick={applyEdit}
+                disabled={isEditing || isGenerating || !latex || !editNote.trim()}
+                className="w-full mt-3 bg-slate-900 hover:bg-slate-800 text-white"
               >
-                coming soon
+                {isEditing ? "applying…" : "apply edit →"}
               </Button>
+              {editError && (
+                <p className="mt-2 font-mono text-xs text-red-500">{editError}</p>
+              )}
             </div>
 
             {/* New worksheet CTA */}
             <Button
               onClick={() => router.push("/")}
               size="lg"
-              className="w-full bg-slate-900 hover:bg-slate-800 text-white"
+              className="w-full bg-white text-slate-900 border border-slate-200 hover:bg-slate-50"
             >
               + new worksheet
             </Button>

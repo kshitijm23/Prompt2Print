@@ -114,3 +114,31 @@ def generate_fallback_latex(prompt: str) -> str:
         block.text for block in message.content if block.type == "text"
     ).strip()
 
+
+
+_EDIT_SYSTEM_PROMPT = """You are a LaTeX worksheet editor. You will be given:
+1. The existing worksheet as LaTeX
+2. An edit instruction from a teacher
+
+Modify the LaTeX to reflect the edit while keeping everything else intact.
+Output ONLY the complete, updated LaTeX document — no explanations, no
+markdown fences, nothing but the LaTeX from \\documentclass to \\end{document}.
+Preserve the existing structure, style, and any diagrams the teacher didn't
+ask to change."""
+
+
+def edit_latex(existing_latex: str, edit_instruction: str) -> str:
+    """Ask Claude to modify existing worksheet LaTeX based on an instruction."""
+    user_msg = (
+        "EXISTING WORKSHEET LATEX:\n" + existing_latex +
+        "\n\nEDIT INSTRUCTION:\n" + edit_instruction
+    )
+    message = _client.messages.create(
+        model=_MODEL,
+        max_tokens=4000,
+        system=_EDIT_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return "".join(
+        block.text for block in message.content if block.type == "text"
+    ).strip()
