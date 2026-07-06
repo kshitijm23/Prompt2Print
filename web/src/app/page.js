@@ -17,6 +17,18 @@ export default function Home() {
   const router = useRouter();
   const supabase = createClient();
   const [userEmail, setUserEmail] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -62,17 +74,34 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
-      
-      {/* sign-out-bar */}
-      <div className="absolute top-4 right-6 z-20 flex items-center gap-3 font-mono text-xs text-slate-500">
-        {userEmail && <span>{userEmail}</span>}
-        <button
-          onClick={handleSignOut}
-          className="underline underline-offset-4 hover:text-slate-900 transition"
-        >
-          sign out
-        </button>
-      </div>
+
+
+      {/* account-menu */}
+      {userEmail && (
+        <div className="absolute top-5 right-6 z-30" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="h-10 w-10 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm shadow-[0px_2px_8px_rgba(15,23,42,0.15)] hover:shadow-[0px_4px_16px_rgba(15,23,42,0.2)] transition"
+            aria-label="Account menu"
+          >
+            {userEmail.charAt(0).toUpperCase()}
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-12 w-64 rounded-xl border border-slate-200 bg-white shadow-[0px_10px_40px_rgba(15,23,42,0.15)] overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100">
+                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Signed in as</p>
+                <p className="text-sm text-slate-900 truncate mt-0.5">{userEmail}</p>
+              </div>
+              <button
+                onClick={handleSignOut}
+                className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
 {/* soft hero gradient */}
       <div
