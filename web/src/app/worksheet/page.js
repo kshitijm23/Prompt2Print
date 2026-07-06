@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase";
 import { Textarea } from "@/components/ui/textarea";
 
 const API_URL = "http://127.0.0.1:8000";
@@ -19,6 +20,39 @@ export default function Worksheet() {
   const [isEditing, setIsEditing] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [editError, setEditError] = useState("");
+  const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "error"
+
+  const supabase = createClient();
+
+  function autoTitle(promptText) {
+    // Take first 60 chars, remove newlines, trim, add ellipsis if truncated
+    const cleaned = promptText.replace(/\s+/g, " ").trim();
+    if (cleaned.length <= 60) return cleaned;
+    return cleaned.slice(0, 60).trim() + "…";
+  }
+
+  async function saveToLibrary() {
+    if (!latex || !prompt) return;
+    setSaveStatus("saving");
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSaveStatus("error");
+        return;
+      }
+      const { error } = await supabase.from("worksheets").insert({
+        user_id: user.id,
+        title: autoTitle(prompt),
+        prompt,
+        latex,
+      });
+      if (error) throw error;
+      setSaveStatus("saved");
+    } catch (err) {
+      console.error("Save failed:", err);
+      setSaveStatus("error");
+    }
+  }
 
   async function consumePdfResponse(response) {
     const b64 = response.headers.get("X-Latex-B64");
@@ -218,6 +252,24 @@ export default function Worksheet() {
               {editError && (
                 <p className="mt-2 font-mono text-xs text-red-500">{editError}</p>
               )}
+            </div>
+
+                        {/* save-card */}
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-2 w-2 rounded-full bg-slate-300" />
+                <p className="font-mono text-[11px] tracking-wider text-slate-600 uppercase">save</p>
+              </div>
+              <Button
+                onClick={saveToLibrary}
+                disabled={!latex || saveStatus === "saving" || saveStatus === "saved"}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                {saveStatus === "saving" && "saving…"}
+                {saveStatus === "saved" && "saved to library ✓"}
+                {saveStatus === "error" && "couldn’t save — try again"}
+                {saveStatus === "" && "save to library"}
+              </Button>
             </div>
 
             {/* New worksheet CTA */}
