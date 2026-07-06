@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -14,6 +15,19 @@ const EXAMPLES = [
 
 export default function Home() {
   const router = useRouter();
+  const supabase = createClient();
+  const [userEmail, setUserEmail] = useState("");
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) setUserEmail(data.user.email);
+    });
+  }, [supabase]);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
   const [prompt, setPrompt] = useState("");
   const [focused, setFocused] = useState(false);
   const [referenceFile, setReferenceFile] = useState(null);
@@ -48,7 +62,19 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
-      {/* soft hero gradient */}
+      
+      {/* sign-out-bar */}
+      <div className="absolute top-4 right-6 z-20 flex items-center gap-3 font-mono text-xs text-slate-500">
+        {userEmail && <span>{userEmail}</span>}
+        <button
+          onClick={handleSignOut}
+          className="underline underline-offset-4 hover:text-slate-900 transition"
+        >
+          sign out
+        </button>
+      </div>
+
+{/* soft hero gradient */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[600px]"
