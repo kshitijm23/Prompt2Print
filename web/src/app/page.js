@@ -134,11 +134,11 @@ export default function Home() {
             </p>
           </div>
         </div>
-        <h1 className="font-display text-[64px] sm:text-[80px] leading-[0.95] tracking-tight text-slate-900">
+        <h1 className="font-display text-[52px] sm:text-[60px] leading-[0.95] tracking-tight text-slate-900">
           Beautiful worksheets,<br />
           <span className="italic text-slate-600">in seconds.</span>
         </h1>
-        <p className="mt-8 text-slate-700 text-[22px] max-w-2xl leading-relaxed">
+        <p className="mt-8 text-slate-700 text-[17px] max-w-2xl leading-relaxed">
           Describe what you need. Get a polished, print-ready PDF with diagrams, boxes, and clean math — no formatting required.
         </p>
       </div>
@@ -168,13 +168,13 @@ export default function Home() {
               onBlur={() => setFocused(false)}
               placeholder="e.g. a grade 6 worksheet on ratios with a real-world word problem and a bar-model diagram..."
               rows={5}
-              className="text-[17px] leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
+              className="!text-base sm:!text-lg lg:!text-xl leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
             />
           </div>
 
           {/* Helper tip */}
           <div className="px-8 mt-2">
-            <p className="font-mono text-xs text-slate-400">
+            <p className="font-mono text-sm text-slate-400">
               tip: be specific — grade, topic, question count, visuals
             </p>
           </div>
@@ -207,7 +207,7 @@ export default function Home() {
             ) : (
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="font-mono text-xs text-slate-500 hover:text-slate-900 underline underline-offset-4 transition"
+                className="font-mono text-sm text-slate-500 hover:text-slate-900 underline underline-offset-4 transition"
               >
                 + attach a reference (PDF or image, optional)
               </button>
@@ -219,7 +219,14 @@ export default function Home() {
 
           {/* row: examples + generate btn */}
           <div className="flex flex-col gap-4 px-8 py-5">
-            <p className="font-mono text-xs tracking-wider text-slate-400 uppercase">Try one</p>
+            <Button
+              onClick={generateWorksheet}
+              size="lg"
+              className="w-full h-[52px] text-lg font-medium bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
+            >
+              Generate worksheet →
+            </Button>
+            <p className="font-mono text-xs tracking-wider text-slate-400 uppercase">or start from an example</p>
             <div className="flex flex-wrap gap-2">
               {EXAMPLES.map((ex) => (
                 <button
@@ -231,13 +238,6 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <Button
-              onClick={generateWorksheet}
-              size="lg"
-              className="w-full h-[52px] text-base font-medium bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
-            >
-              Generate worksheet →
-            </Button>
           </div>
         </div>
 
