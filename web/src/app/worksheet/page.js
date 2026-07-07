@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase";
@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-export default function Worksheet() {
+function WorksheetInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const prompt = searchParams.get("p") || "";
@@ -361,5 +361,14 @@ export default function Worksheet() {
         </div>
       </div>
     </main>
+  );
+}
+
+
+export default function Worksheet() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[color:#FAFAF6]" />}>
+      <WorksheetInner />
+    </Suspense>
   );
 }
