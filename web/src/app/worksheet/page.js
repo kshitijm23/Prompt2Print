@@ -232,7 +232,7 @@ export default function Worksheet() {
             <div className="h-5 w-5 rounded-md bg-slate-900 flex items-center justify-center">
               <span className="text-white font-display text-[11px] leading-none">P</span>
             </div>
-            <span className="font-mono text-sm text-slate-900">prompt2.print</span>
+            <span className="font-mono text-sm text-slate-900">Prompt2Print</span>
           </div>
           <div>
             {pdfUrl && (
@@ -329,6 +329,7 @@ export default function Worksheet() {
               >
                 {saveStatus === "saving" && "saving…"}
                 {saveStatus === "saved" && "saved to library ✓"}
+                {saveStatus === "dirty" && "save changes →"}
                 {saveStatus === "error" && "couldn’t save — try again"}
                 {saveStatus === "" && "save to library"}
               </Button>

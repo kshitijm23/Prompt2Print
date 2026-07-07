@@ -243,7 +243,7 @@ export default function Home() {
 
         {/* small footer */}
         <p className="font-mono text-xs text-slate-300 text-center mt-16">
-          prompt2.print · generated with claude
+          Prompt2Print · generated with claude
         </p>
       </div>
     </main>
