@@ -93,8 +93,14 @@ export default function Home() {
                 <p className="text-sm text-slate-900 truncate mt-0.5">{userEmail}</p>
               </div>
               <button
-                onClick={handleSignOut}
+                onClick={() => router.push("/library")}
                 className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition"
+              >
+                Library
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition border-t border-slate-100"
               >
                 Sign out
               </button>

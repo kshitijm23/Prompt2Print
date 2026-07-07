@@ -12,6 +12,8 @@ export default function Worksheet() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const prompt = searchParams.get("p") || "";
+  const savedId = searchParams.get("id") || "";
+  const [displayPrompt, setDisplayPrompt] = useState(prompt);
 
   const [pdfUrl, setPdfUrl] = useState(null);
   const [latex, setLatex] = useState("");
@@ -20,7 +22,8 @@ export default function Worksheet() {
   const [isEditing, setIsEditing] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [editError, setEditError] = useState("");
-  const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "error"
+  const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "dirty" | "error"
+  const [savedRowId, setSavedRowId] = useState(""); // "" | "saving" | "saved" | "error"
 
   const supabase = createClient();
 
@@ -32,7 +35,9 @@ export default function Worksheet() {
   }
 
   async function saveToLibrary() {
-    if (!latex || !prompt) return;
+    if (!latex) return;
+    const promptForSave = displayPrompt || prompt;
+    if (!promptForSave) return;
     setSaveStatus("saving");
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -40,13 +45,28 @@ export default function Worksheet() {
         setSaveStatus("error");
         return;
       }
-      const { error } = await supabase.from("worksheets").insert({
-        user_id: user.id,
-        title: autoTitle(prompt),
-        prompt,
-        latex,
-      });
-      if (error) throw error;
+      if (savedRowId) {
+        // Update the existing row.
+        const { error } = await supabase
+          .from("worksheets")
+          .update({ latex, prompt: promptForSave })
+          .eq("id", savedRowId);
+        if (error) throw error;
+      } else {
+        // First save: insert a new row and remember the id.
+        const { data, error } = await supabase
+          .from("worksheets")
+          .insert({
+            user_id: user.id,
+            title: autoTitle(promptForSave),
+            prompt: promptForSave,
+            latex,
+          })
+          .select("id")
+          .single();
+        if (error) throw error;
+        if (data?.id) setSavedRowId(data.id);
+      }
       setSaveStatus("saved");
     } catch (err) {
       console.error("Save failed:", err);
@@ -65,6 +85,11 @@ export default function Worksheet() {
             .join("")
         );
         setLatex(decoded);
+        // If this is a previously-saved worksheet and we just replaced its LaTeX (via edit),
+        // mark it dirty so the user knows to save changes.
+        if (savedRowId) {
+          setSaveStatus("dirty");
+        }
       } catch {
         // if decoding fails, just skip; PDF still works
       }
@@ -76,13 +101,50 @@ export default function Worksheet() {
     });
   }
 
-  // Initial generation
+  // Initial generation / load-from-library
   useEffect(() => {
-    if (!prompt) {
+    if (!prompt && !savedId) {
       router.push("/");
       return;
     }
     (async () => {
+      // Load a saved worksheet from the library
+      if (savedId) {
+        try {
+          const { data, error } = await supabase
+            .from("worksheets")
+            .select("prompt, latex")
+            .eq("id", savedId)
+            .single();
+          if (error) throw error;
+          setLatex(data.latex);
+          setDisplayPrompt(data.prompt);
+          setSavedRowId(savedId);
+          // Compile the stored LaTeX to PDF using the backend
+          const compileResp = await fetch(`${API_URL}/compile`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ latex: data.latex }),
+          });
+          if (!compileResp.ok) {
+            setStatus("Couldn't compile this saved worksheet.");
+            return;
+          }
+          const blob = await compileResp.blob();
+          setPdfUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return URL.createObjectURL(blob);
+          });
+          setStatus("");
+          setSaveStatus("saved");
+        } catch (err) {
+          console.error(err);
+          setStatus("Couldn't load this saved worksheet.");
+        } finally {
+          setIsGenerating(false);
+        }
+        return;
+      }
       try {
         const refB64 = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-b64") : null;
         const refName = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : null;
@@ -143,13 +205,13 @@ export default function Worksheet() {
         body: JSON.stringify({ latex, instruction }),
       });
       if (!response.ok) {
-        setEditError("Couldn’t apply that edit. Try rephrasing.");
+        setEditError("Couldn’t apply that edit — the underlying document couldn’t be modified cleanly. Try a smaller change (e.g. one question at a time), or use “+ new worksheet” to start over. Your saved copy in the library is unchanged.");
         return;
       }
       await consumePdfResponse(response);
       setEditNote("");
     } catch {
-      setEditError("Can’t reach the server.");
+      setEditError("Can’t reach the server. Is the backend running?");
     } finally {
       setIsEditing(false);
     }
@@ -225,7 +287,7 @@ export default function Worksheet() {
                 <div className="h-2 w-2 rounded-full bg-emerald-500" />
                 <p className="font-mono text-[11px] tracking-wider text-slate-600 uppercase">your prompt</p>
               </div>
-              <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">{prompt}</p>
+              <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">{displayPrompt}</p>
             </div>
 
             {/* Edit-with-AI */}
