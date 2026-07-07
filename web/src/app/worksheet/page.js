@@ -22,6 +22,7 @@ export default function Worksheet() {
   const [isEditing, setIsEditing] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [editError, setEditError] = useState("");
+  const [editMode, setEditMode] = useState(""); // "" | "patched" | "regenerated"
   const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "dirty" | "error"
   const [savedRowId, setSavedRowId] = useState(""); // "" | "saving" | "saved" | "error"
 
@@ -198,17 +199,20 @@ export default function Worksheet() {
     if (!instruction || !latex) return;
     setIsEditing(true);
     setEditError("");
+    setEditMode("");
     try {
       const response = await fetch(`${API_URL}/edit-worksheet`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ latex, instruction }),
+        body: JSON.stringify({ latex, instruction, prompt: displayPrompt || prompt }),
       });
       if (!response.ok) {
         setEditError("Couldn’t apply that edit — the underlying document couldn’t be modified cleanly. Try a smaller change (e.g. one question at a time), or use “+ new worksheet” to start over. Your saved copy in the library is unchanged.");
         return;
       }
       await consumePdfResponse(response);
+      const mode = response.headers.get("X-Edit-Mode") || "";
+      setEditMode(mode);
       setEditNote("");
     } catch {
       setEditError("Can’t reach the server. Is the backend running?");
@@ -313,6 +317,16 @@ export default function Worksheet() {
               </Button>
               {editError && (
                 <p className="mt-2 font-mono text-xs text-red-500">{editError}</p>
+              )}
+              {!editError && editMode === "regenerated" && (
+                <p className="mt-2 font-mono text-[11px] tracking-wider text-emerald-700 uppercase">
+                  ✓ edit applied · regenerated for reliability
+                </p>
+              )}
+              {!editError && editMode === "patched" && (
+                <p className="mt-2 font-mono text-[11px] tracking-wider text-slate-400 uppercase">
+                  ✓ edit applied
+                </p>
               )}
             </div>
 

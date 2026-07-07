@@ -24,7 +24,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Worksheet-Mode", "X-Latex-B64"],
+    expose_headers=["X-Worksheet-Mode", "X-Latex-B64", "X-Edit-Mode"],
 )
 
 MAX_FIX_ATTEMPTS = 3
@@ -41,6 +41,7 @@ class GenerateRequest(BaseModel):
 class EditRequest(BaseModel):
     latex: str
     instruction: str
+    prompt: str = ""  # original prompt, needed for regenerate-fallback
 
 
 @app.get("/")
@@ -48,15 +49,18 @@ def health():
     return {"status": "ok", "service": "Prompt2Print API"}
 
 
-def _pdf_response_full(pdf_bytes: bytes, mode: str, latex: str) -> Response:
+def _pdf_response_full(pdf_bytes: bytes, mode: str, latex: str, edit_mode: str = "") -> Response:
     """Return PDF as body, send LaTeX as a base64 header so the client can keep it."""
+    headers = {
+        "X-Worksheet-Mode": mode,
+        "X-Latex-B64": base64.b64encode(latex.encode("utf-8")).decode("ascii"),
+    }
+    if edit_mode:
+        headers["X-Edit-Mode"] = edit_mode
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "X-Worksheet-Mode": mode,
-            "X-Latex-B64": base64.b64encode(latex.encode("utf-8")).decode("ascii"),
-        },
+        headers=headers,
     )
 
 
@@ -103,8 +107,17 @@ def generate_endpoint(req: GenerateRequest):
 
 @app.post("/edit-worksheet")
 def edit_endpoint(req: EditRequest):
-    """Apply a conversational edit to an existing worksheet and return a new PDF."""
+    """Apply a conversational edit to an existing worksheet and return a new PDF.
+
+    Strategy:
+      1) Try to *patch* the existing LaTeX with the edit instruction.
+      2) If patching fails after MAX_FIX_ATTEMPTS, fall back to *regenerating*
+         from a merged prompt (original + edit instruction), running the full
+         generate + fix loop + plain-fallback pipeline.
+    """
     log.info("Editing worksheet with instruction: %s", req.instruction[:100])
+
+    # --- Path A: patch the existing LaTeX ---
     latex = edit_latex(req.latex, req.instruction)
     result = compile_latex(latex)
 
@@ -116,10 +129,42 @@ def edit_endpoint(req: EditRequest):
         attempts += 1
 
     if result.ok and result.pdf_bytes:
-        return _pdf_response_full(result.pdf_bytes, "edited", latex)
+        return _pdf_response_full(result.pdf_bytes, "edited", latex, edit_mode="patched")
+
+    # --- Path B: fall back to regenerating from a merged prompt ---
+    log.info("Patch loop failed; falling back to regeneration.")
+    original = (req.prompt or "").strip()
+    if original:
+        merged_prompt = f"{original}\n\nAdditional requirement: {req.instruction.strip()}"
+    else:
+        merged_prompt = req.instruction.strip()
+
+    regen_latex = generate_latex(merged_prompt)
+    regen_result = compile_latex(regen_latex)
+
+    r_attempts = 0
+    while not (regen_result.ok and regen_result.pdf_bytes) and r_attempts < MAX_FIX_ATTEMPTS:
+        error_log = "\n".join(regen_result.log.splitlines()[-25:])
+        regen_latex = fix_latex(regen_latex, error_log)
+        regen_result = compile_latex(regen_latex)
+        r_attempts += 1
+
+    if regen_result.ok and regen_result.pdf_bytes:
+        return _pdf_response_full(regen_result.pdf_bytes, "edited", regen_latex, edit_mode="regenerated")
+
+    # --- Final fallback: plain LaTeX so at least *something* comes back ---
+    plain_latex = generate_fallback_latex(merged_prompt)
+    plain_result = compile_latex(plain_latex)
+    if not (plain_result.ok and plain_result.pdf_bytes):
+        error_log = "\n".join(plain_result.log.splitlines()[-25:])
+        plain_latex = fix_latex(plain_latex, error_log)
+        plain_result = compile_latex(plain_latex)
+
+    if plain_result.ok and plain_result.pdf_bytes:
+        return _pdf_response_full(plain_result.pdf_bytes, "fallback", plain_latex, edit_mode="regenerated")
 
     return Response(
-        content="Could not apply that edit. Try rephrasing.",
+        content="Could not apply that edit. Try starting a new worksheet.",
         media_type="text/plain",
         status_code=422,
     )
