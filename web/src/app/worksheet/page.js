@@ -8,6 +8,61 @@ import { Textarea } from "@/components/ui/textarea";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
+// ------- localStorage cache helpers -------
+const CACHE_KEY = "p2p-cache";
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_MAX_ENTRIES = 5;
+
+function makeCacheKey(prompt, refName, refSize) {
+  return `${(prompt || "").trim()}||${refName || "noref"}||${refSize || "0"}`;
+}
+
+function cacheLookup(key) {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    const now = Date.now();
+    const hit = arr.find(
+      (e) => e.key === key && now - e.timestamp < CACHE_TTL_MS
+    );
+    return hit || null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheStore(key, latex, pdfB64) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    let arr = raw ? JSON.parse(raw) : [];
+    arr = arr.filter((e) => e.key !== key);
+    arr.unshift({ key, latex, pdfB64, timestamp: Date.now() });
+    arr = arr.slice(0, CACHE_MAX_ENTRIES);
+    localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
+  } catch {
+    // storage full / disabled — silently skip
+  }
+}
+
+async function blobToBase64(blob) {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToBlob(b64, type = "application/pdf") {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+// ------- end cache helpers -------
+
 function WorksheetInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -22,14 +77,25 @@ function WorksheetInner() {
   const [isEditing, setIsEditing] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [editError, setEditError] = useState("");
-  const [editMode, setEditMode] = useState(""); // "" | "patched" | "regenerated"
-  const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "dirty" | "error"
-  const [savedRowId, setSavedRowId] = useState(""); // "" | "saving" | "saved" | "error"
+  const [editMode, setEditMode] = useState("");
+  const [saveStatus, setSaveStatus] = useState("");
+  const [savedRowId, setSavedRowId] = useState("");
+  const [userEmail, setUserEmail] = useState("");
 
   const supabase = createClient();
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) setUserEmail(data.user.email);
+    });
+  }, [supabase]);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
+
   function autoTitle(promptText) {
-    // Take first 60 chars, remove newlines, trim, add ellipsis if truncated
     const cleaned = promptText.replace(/\s+/g, " ").trim();
     if (cleaned.length <= 60) return cleaned;
     return cleaned.slice(0, 60).trim() + "…";
@@ -47,14 +113,12 @@ function WorksheetInner() {
         return;
       }
       if (savedRowId) {
-        // Update the existing row.
         const { error } = await supabase
           .from("worksheets")
           .update({ latex, prompt: promptForSave })
           .eq("id", savedRowId);
         if (error) throw error;
       } else {
-        // First save: insert a new row and remember the id.
         const { data, error } = await supabase
           .from("worksheets")
           .insert({
@@ -76,33 +140,30 @@ function WorksheetInner() {
   }
 
   async function consumePdfResponse(response) {
+    let decodedLatex = "";
     const b64 = response.headers.get("X-Latex-B64");
     if (b64) {
       try {
-        const decoded = decodeURIComponent(
+        decodedLatex = decodeURIComponent(
           atob(b64)
             .split("")
             .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
             .join("")
         );
-        setLatex(decoded);
-        // If this is a previously-saved worksheet and we just replaced its LaTeX (via edit),
-        // mark it dirty so the user knows to save changes.
+        setLatex(decodedLatex);
         if (savedRowId) {
           setSaveStatus("dirty");
         }
-      } catch {
-        // if decoding fails, just skip; PDF still works
-      }
+      } catch {}
     }
     const blob = await response.blob();
     setPdfUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return URL.createObjectURL(blob);
     });
+    return { latex: decodedLatex, blob };
   }
 
-  // Initial generation / load-from-library
   useEffect(() => {
     if (!prompt && !savedId) {
       router.push("/");
@@ -121,7 +182,6 @@ function WorksheetInner() {
           setLatex(data.latex);
           setDisplayPrompt(data.prompt);
           setSavedRowId(savedId);
-          // Compile the stored LaTeX to PDF using the backend
           const compileResp = await fetch(`${API_URL}/compile`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -146,14 +206,43 @@ function WorksheetInner() {
         }
         return;
       }
+
+      // Check localStorage cache first (same prompt + same reference signature)
+      const refNameForKey =
+        typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
+      const refSizeForKey =
+        typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
+      const key = makeCacheKey(prompt, refNameForKey, refSizeForKey);
+      const cached = cacheLookup(key);
+      if (cached) {
+        setLatex(cached.latex);
+        const blob = base64ToBlob(cached.pdfB64);
+        setPdfUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(blob);
+        });
+        setStatus("");
+        setIsGenerating(false);
+        // clear any stashed reference since we skipped the API entirely
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem("p2p-ref-b64");
+          sessionStorage.removeItem("p2p-ref-name");
+          sessionStorage.removeItem("p2p-ref-type");
+          sessionStorage.removeItem("p2p-ref-size");
+        }
+        return;
+      }
+
       try {
-        const refB64 = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-b64") : null;
-        const refName = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : null;
-        const refType = typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-type") : null;
+        const refB64 =
+          typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-b64") : null;
+        const refName =
+          typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : null;
+        const refType =
+          typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-type") : null;
 
         let response;
         if (refB64 && refName) {
-          // Reference-based generation via multipart form
           const bin = atob(refB64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -168,10 +257,10 @@ function WorksheetInner() {
             body: form,
           });
 
-          // Clear the stashed reference so it doesn't persist
           sessionStorage.removeItem("p2p-ref-b64");
           sessionStorage.removeItem("p2p-ref-name");
           sessionStorage.removeItem("p2p-ref-type");
+          sessionStorage.removeItem("p2p-ref-size");
         } else {
           response = await fetch(`${API_URL}/generate`, {
             method: "POST",
@@ -183,8 +272,16 @@ function WorksheetInner() {
           setStatus("Couldn’t generate that one. Go back and try rephrasing.");
           return;
         }
-        await consumePdfResponse(response);
+        const { latex: gotLatex, blob: gotBlob } = await consumePdfResponse(response);
         setStatus("");
+
+        // Cache the fresh result for accidental-refresh recovery
+        if (gotLatex && gotBlob) {
+          try {
+            const pdfB64 = await blobToBase64(gotBlob);
+            cacheStore(key, gotLatex, pdfB64);
+          } catch {}
+        }
       } catch (err) {
         setStatus("Can’t reach the server. Is the backend running?");
       } finally {
@@ -210,10 +307,24 @@ function WorksheetInner() {
         setEditError("Couldn’t apply that edit — the underlying document couldn’t be modified cleanly. Try a smaller change (e.g. one question at a time), or use “+ new worksheet” to start over. Your saved copy in the library is unchanged.");
         return;
       }
-      await consumePdfResponse(response);
+      const { latex: editedLatex, blob: editedBlob } = await consumePdfResponse(response);
       const mode = response.headers.get("X-Edit-Mode") || "";
       setEditMode(mode);
       setEditNote("");
+
+      // Overwrite the cache with the edited version so refresh restores latest state.
+      // Only for prompt-based generations, not library loads (savedId path uses DB persistence).
+      if (!savedId && editedLatex && editedBlob) {
+        try {
+          const refNameForKey =
+            typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
+          const refSizeForKey =
+            typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
+          const key = makeCacheKey(prompt, refNameForKey, refSizeForKey);
+          const pdfB64 = await blobToBase64(editedBlob);
+          cacheStore(key, editedLatex, pdfB64);
+        } catch {}
+      }
     } catch {
       setEditError("Can’t reach the server. Is the backend running?");
     } finally {
@@ -238,15 +349,37 @@ function WorksheetInner() {
             </div>
             <span className="font-mono text-sm text-slate-900">Prompt2Print</span>
           </div>
-          <div>
+          <div className="flex items-center gap-1">
             {pdfUrl && (
               <a
                 href={pdfUrl}
                 download="worksheet.pdf"
-                className="font-mono text-sm text-slate-900 underline underline-offset-4 hover:text-slate-600 transition"
+                className="font-mono text-sm text-slate-900 underline underline-offset-4 hover:text-slate-600 transition mr-2"
               >
                 download pdf →
               </a>
+            )}
+            {userEmail && (
+              <>
+                <button
+                  onClick={() => router.push("/library")}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+                >
+                  Library
+                </button>
+                <button
+                  onClick={handleSignOut}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+                >
+                  Sign out
+                </button>
+                <div
+                  className="ml-1 h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-xs shadow-[0px_2px_8px_rgba(15,23,42,0.15)]"
+                  title={userEmail}
+                >
+                  {userEmail.charAt(0).toUpperCase()}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -330,7 +463,7 @@ function WorksheetInner() {
               )}
             </div>
 
-                        {/* save-card */}
+            {/* save-card */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-2 w-2 rounded-full bg-slate-300" />
@@ -363,7 +496,6 @@ function WorksheetInner() {
     </main>
   );
 }
-
 
 export default function Worksheet() {
   return (

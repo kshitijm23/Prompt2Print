@@ -17,18 +17,6 @@ export default function Home() {
   const router = useRouter();
   const supabase = createClient();
   const [userEmail, setUserEmail] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    function handleClickOutside(e) {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
-        setMenuOpen(false);
-      }
-    }
-    if (menuOpen) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuOpen]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -40,6 +28,7 @@ export default function Home() {
     await supabase.auth.signOut();
     router.push("/login");
   }
+
   const [prompt, setPrompt] = useState("");
   const [focused, setFocused] = useState(false);
   const [referenceFile, setReferenceFile] = useState(null);
@@ -55,7 +44,6 @@ export default function Home() {
     if (!toUse) return;
 
     if (referenceFile) {
-      // Store the file in sessionStorage as base64 for the worksheet page to pick up
       const buffer = await referenceFile.arrayBuffer();
       let binary = "";
       const bytes = new Uint8Array(buffer);
@@ -64,10 +52,12 @@ export default function Home() {
       sessionStorage.setItem("p2p-ref-b64", b64);
       sessionStorage.setItem("p2p-ref-name", referenceFile.name);
       sessionStorage.setItem("p2p-ref-type", referenceFile.type);
+      sessionStorage.setItem("p2p-ref-size", String(referenceFile.size));
     } else {
       sessionStorage.removeItem("p2p-ref-b64");
       sessionStorage.removeItem("p2p-ref-name");
       sessionStorage.removeItem("p2p-ref-type");
+      sessionStorage.removeItem("p2p-ref-size");
     }
     router.push("/worksheet?p=" + encodeURIComponent(toUse));
   }
@@ -75,41 +65,31 @@ export default function Home() {
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
 
-
-      {/* account-menu */}
+      {/* top-right nav */}
       {userEmail && (
-        <div className="absolute top-5 right-6 z-30" ref={menuRef}>
+        <div className="absolute top-5 right-6 z-30 flex items-center gap-1">
           <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="h-10 w-10 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm shadow-[0px_2px_8px_rgba(15,23,42,0.15)] hover:shadow-[0px_4px_16px_rgba(15,23,42,0.2)] transition"
-            aria-label="Account menu"
+            onClick={() => router.push("/library")}
+            className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+          >
+            Library
+          </button>
+          <button
+            onClick={handleSignOut}
+            className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+          >
+            Sign out
+          </button>
+          <div
+            className="ml-1 h-9 w-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm shadow-[0px_2px_8px_rgba(15,23,42,0.15)]"
+            title={userEmail}
           >
             {userEmail.charAt(0).toUpperCase()}
-          </button>
-          {menuOpen && (
-            <div className="absolute right-0 top-12 w-64 rounded-xl border border-slate-200 bg-white shadow-[0px_10px_40px_rgba(15,23,42,0.15)] overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Signed in as</p>
-                <p className="text-sm text-slate-900 truncate mt-0.5">{userEmail}</p>
-              </div>
-              <button
-                onClick={() => router.push("/library")}
-                className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition"
-              >
-                Library
-              </button>
-              <button
-                onClick={handleSignOut}
-                className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition border-t border-slate-100"
-              >
-                Sign out
-              </button>
-            </div>
-          )}
+          </div>
         </div>
       )}
 
-{/* soft hero gradient */}
+      {/* soft hero gradient */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[600px]"
@@ -146,7 +126,7 @@ export default function Home() {
       {/* Generator - hero card */}
       <div className="relative max-w-6xl mx-auto px-6 pb-24">
         <div
-          className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-200 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)]"}`}
+          className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-300 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_70px_-15px_rgba(15,23,42,0.15)]"}`}
         >
           {/* Card header row */}
           <div className="flex items-center justify-between px-8 pt-7 pb-3">
@@ -166,6 +146,7 @@ export default function Home() {
               onChange={(e) => setPrompt(e.target.value)}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
+              autoFocus
               placeholder="e.g. a grade 6 worksheet on ratios with a real-world word problem and a bar-model diagram..."
               rows={5}
               className="!text-base sm:!text-lg lg:!text-xl leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
