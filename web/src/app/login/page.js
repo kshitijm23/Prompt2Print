@@ -16,6 +16,17 @@ function GoogleIcon() {
   );
 }
 
+function isEmailNotConfirmedError(err) {
+  if (!err) return false;
+  const msg = (err.message || "").toLowerCase();
+  const code = (err.code || "").toLowerCase();
+  return (
+    code === "email_not_confirmed" ||
+    msg.includes("email not confirmed") ||
+    msg.includes("not confirmed")
+  );
+}
+
 export default function Login() {
   const router = useRouter();
   const supabase = createClient();
@@ -27,35 +38,63 @@ export default function Login() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Post-signup success screen state
+  const [signupSuccessEmail, setSignupSuccessEmail] = useState("");
+
+  // "Resend confirmation" state (shown after email-not-confirmed error on signin)
+  const [showResend, setShowResend] = useState(false);
+  const [resendStatus, setResendStatus] = useState(""); // "" | "sending" | "sent" | "error"
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) router.replace("/");
     });
   }, [router, supabase]);
 
-  function switchMode(nnext) {
-    setMode(nnext);
+  function switchMode(next) {
+    setMode(next);
     setError("");
     setConfirm("");
+    setShowResend(false);
+    setResendStatus("");
+    setSignupSuccessEmail("");
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    setShowResend(false);
+    setResendStatus("");
     setBusy(true);
     try {
       if (mode === "signup") {
         if (password !== confirm) throw new Error("Passwords don't match.");
         if (password.length < 6) throw new Error("Password must be at least 6 characters.");
-        const { data, error: err } = await supabase.auth.signUp({ email, password });
+        const { data, error: err } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+          },
+        });
         if (err) throw err;
-        if (data.session) { router.replace("/"); return; }
-        const { error: signErr } = await supabase.auth.signInWithPassword({ email, password });
-        if (signErr) throw signErr;
-        router.replace("/");
+        // With email confirmation enabled, data.session will be null.
+        // Show the "check your email" screen instead of trying to sign in.
+        if (data.session) {
+          // Confirmation is off (shouldn't happen in prod, but handle gracefully)
+          router.replace("/");
+          return;
+        }
+        setSignupSuccessEmail(email);
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-        if (err) throw err;
+        if (err) {
+          if (isEmailNotConfirmedError(err)) {
+            setShowResend(true);
+            throw new Error("Your email isn't confirmed yet. Check your inbox for the confirmation link, or resend it below.");
+          }
+          throw err;
+        }
         router.replace("/");
       }
     } catch (err) {
@@ -65,11 +104,30 @@ export default function Login() {
     }
   }
 
+  async function handleResendConfirmation() {
+    if (!email) return;
+    setResendStatus("sending");
+    try {
+      const { error: err } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (err) throw err;
+      setResendStatus("sent");
+    } catch (err) {
+      console.error("Resend failed:", err);
+      setResendStatus("error");
+    }
+  }
+
   async function signInWithGoogle() {
     setError("");
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin + "/auth/callback" },
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
     if (err) setError(err.message);
   }
@@ -96,117 +154,189 @@ export default function Login() {
           </div>
           <div className="text-center">
             <h1 className="font-display text-[32px] leading-none text-slate-900">
-              {isSignup ? "Create your account" : "Welcome back"}
+              {signupSuccessEmail
+                ? "Check your email"
+                : isSignup
+                ? "Create your account"
+                : "Welcome back"}
             </h1>
             <p className="mt-2 text-slate-500 text-sm">
-              {isSignup ? "Start turning prompts into polished worksheets." : "Sign in to continue to Prompt2Print."}
+              {signupSuccessEmail
+                ? "One quick step and you're in."
+                : isSignup
+                ? "Start turning prompts into polished worksheets."
+                : "Sign in to continue to Prompt2Print."}
             </p>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_60px_-20px_rgba(15,23,42,0.1)]">
-          {/* segmented tabs */}
-          <div className="relative grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg mb-6">
+        {signupSuccessEmail ? (
+          // ---------- "Check your email" success screen ----------
+          <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_60px_-20px_rgba(15,23,42,0.1)]">
+            <div className="flex flex-col items-center text-center">
+              <div className="h-14 w-14 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4">
+                <svg className="h-7 w-7 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-slate-700 text-sm leading-relaxed">
+                We sent a confirmation link to
+              </p>
+              <p className="mt-1 font-medium text-slate-900 text-[15px] break-all">
+                {signupSuccessEmail}
+              </p>
+              <p className="mt-4 text-slate-500 text-[13px] leading-relaxed">
+                Click the link to activate your account, then come back and sign in.
+              </p>
+              <div className="mt-4 w-full px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-100 text-left">
+                <p className="text-[12px] text-amber-800 leading-relaxed">
+                  <span className="font-medium">Can't find it?</span> Check your spam folder — the confirmation email sometimes lands there.
+                </p>
+              </div>
+
+              <div className="mt-5 w-full flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={resendStatus === "sending" || resendStatus === "sent"}
+                  className="w-full px-4 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-900 font-medium text-sm hover:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed transition"
+                >
+                  {resendStatus === "sending" && "Resending…"}
+                  {resendStatus === "sent" && "Sent ✓ Check your inbox again"}
+                  {resendStatus === "error" && "Couldn't resend — try again"}
+                  {resendStatus === "" && "Resend confirmation email"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchMode("signin")}
+                  className="w-full px-4 py-2.5 rounded-lg text-slate-600 font-medium text-sm hover:text-slate-900 transition"
+                >
+                  Back to sign in
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          // ---------- Normal sign in / create account card ----------
+          <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_60px_-20px_rgba(15,23,42,0.1)]">
+            {/* segmented tabs */}
+            <div className="relative grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg mb-6">
+              <button
+                type="button"
+                onClick={() => switchMode("signin")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition ${isSignup ? "text-slate-500 hover:text-slate-900" : "bg-white text-slate-900 shadow-sm"}`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => switchMode("signup")}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition ${isSignup ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"}`}
+              >
+                Create account
+              </button>
+            </div>
+
+            {/* Google button */}
             <button
               type="button"
-              onClick={() => switchMode("signin")}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition ${isSignup ? "text-slate-500 hover:text-slate-900" : "bg-white text-slate-900 shadow-sm"}`}
+              onClick={signInWithGoogle}
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 font-medium text-sm hover:bg-slate-50 hover:border-slate-300 transition"
             >
-              Sign in
+              <GoogleIcon />
+              {isSignup ? "Sign up with Google" : "Continue with Google"}
             </button>
-            <button
-              type="button"
-              onClick={() => switchMode("signup")}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition ${isSignup ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"}`}
-            >
-              Create account
-            </button>
-          </div>
 
-          {/* Google button */}
-          <button
-            type="button"
-            onClick={signInWithGoogle}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 font-medium text-sm hover:bg-slate-50 hover:border-slate-300 transition"
-          >
-            <GoogleIcon />
-            {isSignup ? "Sign up with Google" : "Continue with Google"}
-          </button>
-
-          {/* divider */}
-          <div className="flex items-center gap-3 my-5">
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">
-              or
-            </span>
-            <div className="h-px flex-1 bg-slate-200" />
-          </div>
-
-          {/* form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
-                Email
-              </label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@school.edu"
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm transition focus:outline-none focus:border-slate-900 focus:ring-0"
-              />
-            </div>
-            <div>
-              <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
-                Password
-              </label>
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={isSignup ? "At least 6 characters" : "Your password"}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm transition focus:outline-none focus:border-slate-900 focus:ring-0"
-              />
+            {/* divider */}
+            <div className="flex items-center gap-3 my-5">
+              <div className="h-px flex-1 bg-slate-200" />
+              <span className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">
+                or
+              </span>
+              <div className="h-px flex-1 bg-slate-200" />
             </div>
 
-            {isSignup && (
+            {/* form */}
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
-                  Confirm password
+                  Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@school.edu"
+                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm transition focus:outline-none focus:border-slate-900 focus:ring-0"
+                />
+              </div>
+              <div>
+                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
+                  Password
                 </label>
                 <input
                   type="password"
                   required
                   minLength={6}
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  placeholder="Re-enter to confirm"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={isSignup ? "At least 6 characters" : "Your password"}
                   className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm transition focus:outline-none focus:border-slate-900 focus:ring-0"
                 />
               </div>
-            )}
 
-            {error && (
-              <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-rose-50 border border-rose-200">
-                <svg className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <p className="text-[13px] text-rose-700">{error}</p>
-              </div>
-            )}
+              {isSignup && (
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
+                    Confirm password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder="Re-enter to confirm"
+                    className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm transition focus:outline-none focus:border-slate-900 focus:ring-0"
+                  />
+                </div>
+              )}
 
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full px-4 py-3 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-medium text-sm transition shadow-[0px_1px_2px_rgba(15,23,42,0.2)]"
-            >
-              {busy ? "Working…" : isSignup ? "Create account" : "Sign in"}
-            </button>
-          </form>
-        </div>
+              {error && (
+                <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-rose-50 border border-rose-200">
+                  <svg className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-[13px] text-rose-700">{error}</p>
+                </div>
+              )}
+
+              {/* Inline resend confirmation button on "email not confirmed" signin error */}
+              {showResend && (
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={resendStatus === "sending" || resendStatus === "sent"}
+                  className="w-full px-4 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-900 font-medium text-sm hover:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed transition"
+                >
+                  {resendStatus === "sending" && "Resending…"}
+                  {resendStatus === "sent" && "Sent ✓ Check your inbox (and spam)"}
+                  {resendStatus === "error" && "Couldn't resend — try again"}
+                  {resendStatus === "" && "Resend confirmation email"}
+                </button>
+              )}
+
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full px-4 py-3 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-medium text-sm transition shadow-[0px_1px_2px_rgba(15,23,42,0.2)]"
+              >
+                {busy ? "Working…" : isSignup ? "Create account" : "Sign in"}
+              </button>
+            </form>
+          </div>
+        )}
 
         <p className="text-center mt-6 text-[12px] text-slate-400">
           Prompt2Print · used by teachers
