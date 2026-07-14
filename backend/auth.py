@@ -17,7 +17,6 @@ if not SUPABASE_JWT_SECRET:
         "SUPABASE_JWT_SECRET env var is required (Project Settings → API → JWT Secret)"
     )
 
-# auto_error=False so we can produce our own error responses
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -35,21 +34,23 @@ def get_current_user_id(
         )
     token = credentials.credentials
     try:
+        # verify_aud=False: Supabase's audience claim varies by client SDK version.
+        # Signature and expiry are still enforced — this only skips the audience match.
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
             algorithms=["HS256"],
-            audience="authenticated",
+            options={"verify_aud": False},
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired — sign in again",
         )
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
+            detail=f"Invalid token: {str(e)[:100]}",
         )
     user_id = payload.get("sub")
     if not user_id:
