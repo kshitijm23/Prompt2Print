@@ -1,23 +1,56 @@
 """Supabase JWT verification for FastAPI.
 
-Validates the Authorization: Bearer <token> header on protected endpoints.
-The token is signed by Supabase with SUPABASE_JWT_SECRET (HS256) and contains
-the user's UUID in the `sub` claim.
+Uses Supabase's JWKS endpoint to verify ES256-signed tokens. Falls back
+to the legacy HS256 secret if configured (older Supabase projects).
 """
 
 import os
 import jwt
+from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")  # legacy HS256, optional
 
-if not SUPABASE_JWT_SECRET:
+if not SUPABASE_URL:
     raise RuntimeError(
-        "SUPABASE_JWT_SECRET env var is required (Project Settings → API → JWT Secret)"
+        "SUPABASE_URL env var is required"
     )
 
+# Supabase's JWKS endpoint for asymmetric (ES256) signing keys
+_JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+_jwks_client = PyJWKClient(_JWKS_URL, cache_keys=True, lifespan=3600)
+
 _bearer = HTTPBearer(auto_error=False)
+
+
+def _decode_token(token: str) -> dict:
+    """Try ES256 via JWKS first, fall back to HS256 with the shared secret."""
+    unverified_header = jwt.get_unverified_header(token)
+    alg = unverified_header.get("alg", "")
+
+    if alg == "ES256":
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256"],
+            options={"verify_aud": False},
+        )
+    elif alg == "HS256":
+        if not SUPABASE_JWT_SECRET:
+            raise jwt.InvalidTokenError(
+                "Token uses HS256 but SUPABASE_JWT_SECRET is not configured"
+            )
+        return jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+    else:
+        raise jwt.InvalidTokenError(f"Unsupported algorithm: {alg}")
 
 
 def get_current_user_id(
@@ -34,14 +67,7 @@ def get_current_user_id(
         )
     token = credentials.credentials
     try:
-        # verify_aud=False: Supabase's audience claim varies by client SDK version.
-        # Signature and expiry are still enforced — this only skips the audience match.
-        payload = jwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
+        payload = _decode_token(token)
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
