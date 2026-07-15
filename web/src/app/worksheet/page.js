@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase";
@@ -10,7 +10,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 // ------- localStorage cache helpers -------
 const CACHE_KEY = "p2p-cache";
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5;
 
 function makeCacheKey(prompt, refName, refSize) {
@@ -42,9 +42,7 @@ function cacheStore(key, latex, pdfB64) {
     arr.unshift({ key, latex, pdfB64, timestamp: Date.now() });
     arr = arr.slice(0, CACHE_MAX_ENTRIES);
     localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
-  } catch {
-    // storage full / disabled — silently skip
-  }
+  } catch {}
 }
 
 async function blobToBase64(blob) {
@@ -61,7 +59,6 @@ function base64ToBlob(b64, type = "application/pdf") {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type });
 }
-// ------- end cache helpers -------
 
 function WorksheetInner() {
   const router = useRouter();
@@ -81,13 +78,49 @@ function WorksheetInner() {
   const [saveStatus, setSaveStatus] = useState("");
   const [savedRowId, setSavedRowId] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [credits, setCredits] = useState(null);
+  const [outOfCredits, setOutOfCredits] = useState(false);
+
+  // Guards against React StrictMode double-invoking the generation effect
+  // (which was causing 2 credits to be deducted per worksheet in dev).
+  const hasStartedRef = useRef(false);
 
   const supabase = createClient();
 
+  // Get current user's JWT for Authorization header on all backend calls
+  async function getAuthHeaders() {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      router.push("/login");
+      return null;
+    }
+    return { Authorization: `Bearer ${session.access_token}` };
+  }
+
+  async function refetchCredits() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("credits_remaining")
+      .eq("user_id", user.id)
+      .single();
+    if (profile) setCredits(profile.credits_remaining);
+  }
+
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUserEmail(data.user.email);
-    });
+    (async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData.user) {
+        setUserEmail(userData.user.email);
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("credits_remaining")
+          .eq("user_id", userData.user.id)
+          .single();
+        if (profile) setCredits(profile.credits_remaining);
+      }
+    })();
   }, [supabase]);
 
   async function handleSignOut() {
@@ -165,12 +198,17 @@ function WorksheetInner() {
   }
 
   useEffect(() => {
+    // Guard against React StrictMode double-invocation in dev.
+    // Without this, the generation fires twice → 2 credits deducted per worksheet.
+    if (hasStartedRef.current) return;
+    hasStartedRef.current = true;
+
     if (!prompt && !savedId) {
       router.push("/");
       return;
     }
     (async () => {
-      // Load a saved worksheet from the library
+      // Library load path
       if (savedId) {
         try {
           const { data, error } = await supabase
@@ -182,9 +220,13 @@ function WorksheetInner() {
           setLatex(data.latex);
           setDisplayPrompt(data.prompt);
           setSavedRowId(savedId);
+
+          const authHeaders = await getAuthHeaders();
+          if (!authHeaders) return;
+
           const compileResp = await fetch(`${API_URL}/compile`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...authHeaders },
             body: JSON.stringify({ latex: data.latex }),
           });
           if (!compileResp.ok) {
@@ -207,7 +249,7 @@ function WorksheetInner() {
         return;
       }
 
-      // Check localStorage cache first (same prompt + same reference signature)
+      // Cache lookup (same prompt + same reference signature)
       const refNameForKey =
         typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
       const refSizeForKey =
@@ -223,7 +265,6 @@ function WorksheetInner() {
         });
         setStatus("");
         setIsGenerating(false);
-        // clear any stashed reference since we skipped the API entirely
         if (typeof window !== "undefined") {
           sessionStorage.removeItem("p2p-ref-b64");
           sessionStorage.removeItem("p2p-ref-name");
@@ -234,6 +275,9 @@ function WorksheetInner() {
       }
 
       try {
+        const authHeaders = await getAuthHeaders();
+        if (!authHeaders) return;
+
         const refB64 =
           typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-b64") : null;
         const refName =
@@ -254,6 +298,7 @@ function WorksheetInner() {
           setStatus("Reading your reference and generating...");
           response = await fetch(`${API_URL}/generate-from-reference`, {
             method: "POST",
+            headers: { ...authHeaders },
             body: form,
           });
 
@@ -264,18 +309,25 @@ function WorksheetInner() {
         } else {
           response = await fetch(`${API_URL}/generate`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...authHeaders },
             body: JSON.stringify({ prompt }),
           });
         }
         if (!response.ok) {
-          setStatus("Couldn’t generate that one. Go back and try rephrasing.");
+          if (response.status === 402) {
+            setOutOfCredits(true);
+            await refetchCredits();
+            return;
+          }
+          setStatus("Couldn't generate that one. Go back and try rephrasing.");
           return;
         }
         const { latex: gotLatex, blob: gotBlob } = await consumePdfResponse(response);
         setStatus("");
 
-        // Cache the fresh result for accidental-refresh recovery
+        // Refresh credits pill after successful deduction
+        await refetchCredits();
+
         if (gotLatex && gotBlob) {
           try {
             const pdfB64 = await blobToBase64(gotBlob);
@@ -283,7 +335,7 @@ function WorksheetInner() {
           } catch {}
         }
       } catch (err) {
-        setStatus("Can’t reach the server. Is the backend running?");
+        setStatus("Can't reach the server. Is the backend running?");
       } finally {
         setIsGenerating(false);
       }
@@ -298,13 +350,16 @@ function WorksheetInner() {
     setEditError("");
     setEditMode("");
     try {
+      const authHeaders = await getAuthHeaders();
+      if (!authHeaders) return;
+
       const response = await fetch(`${API_URL}/edit-worksheet`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ latex, instruction, prompt: displayPrompt || prompt }),
       });
       if (!response.ok) {
-        setEditError("Couldn’t apply that edit — the underlying document couldn’t be modified cleanly. Try a smaller change (e.g. one question at a time), or use “+ new worksheet” to start over. Your saved copy in the library is unchanged.");
+        setEditError("Couldn't apply that edit — the underlying document couldn't be modified cleanly. Try a smaller change (e.g. one question at a time), or use \"+ new worksheet\" to start over. Your saved copy in the library is unchanged.");
         return;
       }
       const { latex: editedLatex, blob: editedBlob } = await consumePdfResponse(response);
@@ -312,8 +367,7 @@ function WorksheetInner() {
       setEditMode(mode);
       setEditNote("");
 
-      // Overwrite the cache with the edited version so refresh restores latest state.
-      // Only for prompt-based generations, not library loads (savedId path uses DB persistence).
+      // Overwrite cache with edited version so refresh restores latest state
       if (!savedId && editedLatex && editedBlob) {
         try {
           const refNameForKey =
@@ -326,7 +380,7 @@ function WorksheetInner() {
         } catch {}
       }
     } catch {
-      setEditError("Can’t reach the server. Is the backend running?");
+      setEditError("Can't reach the server. Is the backend running?");
     } finally {
       setIsEditing(false);
     }
@@ -359,6 +413,21 @@ function WorksheetInner() {
                 download pdf →
               </a>
             )}
+            {credits !== null && (
+              <button
+                onClick={() => router.push("/pricing")}
+                className={`px-3 py-1.5 rounded-lg font-mono text-xs tracking-wider uppercase transition mr-1 ${
+                  credits === 0
+                    ? "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                    : credits <= 2
+                    ? "bg-amber-50 text-amber-800 border border-amber-100 hover:bg-amber-100"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+                title="View pricing"
+              >
+                {credits} left
+              </button>
+            )}
             {userEmail && (
               <>
                 <button
@@ -388,9 +457,42 @@ function WorksheetInner() {
       {/* Layout B */}
       <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-          {/* MAIN: PDF */}
+          {/* MAIN: PDF or out-of-credits card */}
           <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)] overflow-hidden relative">
-            {isGenerating ? (
+            {outOfCredits ? (
+              <div className="h-[800px] flex flex-col items-center justify-center px-8 text-center">
+                <div className="h-14 w-14 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center mb-5">
+                  <svg className="h-7 w-7 text-rose-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="font-mono text-[11px] tracking-wider text-rose-700 uppercase mb-2">
+                  Out of worksheets
+                </p>
+                <h2 className="font-display text-[32px] leading-tight text-slate-900 mb-3">
+                  You've used all your worksheets.
+                </h2>
+                <p className="text-slate-600 text-[15px] max-w-md leading-relaxed mb-8">
+                  Upgrade to keep generating. Edits stay free — you can still tweak the ones you've made.
+                </p>
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => router.push("/pricing")}
+                    size="lg"
+                    className="bg-slate-900 hover:bg-slate-800 text-white px-6"
+                  >
+                    View pricing →
+                  </Button>
+                  <Button
+                    onClick={() => router.push("/library")}
+                    size="lg"
+                    className="bg-white text-slate-900 border border-slate-200 hover:bg-slate-50 px-6"
+                  >
+                    Go to library
+                  </Button>
+                </div>
+              </div>
+            ) : isGenerating ? (
               <div className="h-[800px] flex flex-col items-center justify-center gap-4">
                 <div className="h-10 w-10 rounded-full border-2 border-slate-200 border-t-slate-900 animate-spin" />
                 <p className="font-mono text-sm text-slate-500">{status}</p>
@@ -418,7 +520,6 @@ function WorksheetInner() {
 
           {/* SIDEBAR */}
           <div className="flex flex-col gap-4">
-            {/* The original prompt */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-2 w-2 rounded-full bg-emerald-500" />
@@ -427,7 +528,6 @@ function WorksheetInner() {
               <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">{displayPrompt}</p>
             </div>
 
-            {/* Edit-with-AI */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-2 w-2 rounded-full bg-blue-500" />
@@ -438,12 +538,12 @@ function WorksheetInner() {
                 onChange={(e) => setEditNote(e.target.value)}
                 placeholder="e.g. make question 3 harder, add a word bank"
                 rows={3}
-                disabled={isEditing || isGenerating || !latex}
+                disabled={isEditing || isGenerating || !latex || outOfCredits}
                 className="text-sm resize-none"
               />
               <Button
                 onClick={applyEdit}
-                disabled={isEditing || isGenerating || !latex || !editNote.trim()}
+                disabled={isEditing || isGenerating || !latex || !editNote.trim() || outOfCredits}
                 className="w-full mt-3 bg-slate-900 hover:bg-slate-800 text-white"
               >
                 {isEditing ? "applying…" : "apply edit →"}
@@ -463,7 +563,6 @@ function WorksheetInner() {
               )}
             </div>
 
-            {/* save-card */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-2 w-2 rounded-full bg-slate-300" />
@@ -471,18 +570,17 @@ function WorksheetInner() {
               </div>
               <Button
                 onClick={saveToLibrary}
-                disabled={!latex || saveStatus === "saving" || saveStatus === "saved"}
+                disabled={!latex || saveStatus === "saving" || saveStatus === "saved" || outOfCredits}
                 className="w-full bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-200 disabled:text-slate-400"
               >
                 {saveStatus === "saving" && "saving…"}
                 {saveStatus === "saved" && "saved to library ✓"}
                 {saveStatus === "dirty" && "save changes →"}
-                {saveStatus === "error" && "couldn’t save — try again"}
+                {saveStatus === "error" && "couldn't save — try again"}
                 {saveStatus === "" && "save to library"}
               </Button>
             </div>
 
-            {/* New worksheet CTA */}
             <Button
               onClick={() => router.push("/")}
               size="lg"
