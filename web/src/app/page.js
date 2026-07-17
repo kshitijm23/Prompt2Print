@@ -17,11 +17,21 @@ export default function Home() {
   const router = useRouter();
   const supabase = createClient();
   const [userEmail, setUserEmail] = useState("");
+  const [credits, setCredits] = useState(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUserEmail(data.user.email);
-    });
+    (async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData.user) {
+        setUserEmail(userData.user.email);
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("credits_remaining")
+          .eq("user_id", userData.user.id)
+          .single();
+        if (profile) setCredits(profile.credits_remaining);
+      }
+    })();
   }, [supabase]);
 
   async function handleSignOut() {
@@ -68,6 +78,21 @@ export default function Home() {
       {/* top-right nav */}
       {userEmail && (
         <div className="absolute top-5 right-6 z-30 flex items-center gap-1">
+          {credits !== null && (
+            <button
+              onClick={() => router.push("/pricing")}
+              className={`px-3 py-1.5 rounded-lg font-mono text-xs tracking-wider uppercase transition mr-1 ${
+                credits === 0
+                  ? "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                  : credits <= 2
+                  ? "bg-amber-50 text-amber-800 border border-amber-100 hover:bg-amber-100"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              }`}
+              title="View pricing"
+            >
+              {credits} {credits === 1 ? "worksheet" : "worksheets"} left
+            </button>
+          )}
           <button
             onClick={() => router.push("/library")}
             className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
@@ -128,7 +153,6 @@ export default function Home() {
         <div
           className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-300 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_70px_-15px_rgba(15,23,42,0.15)]"}`}
         >
-          {/* Card header row */}
           <div className="flex items-center justify-between px-8 pt-7 pb-3">
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-emerald-500" />
@@ -139,7 +163,6 @@ export default function Home() {
             <span className="font-mono text-xs text-slate-400">{prompt.length} chars</span>
           </div>
 
-          {/* Textarea */}
           <div className="px-8">
             <Textarea
               value={prompt}
@@ -153,14 +176,12 @@ export default function Home() {
             />
           </div>
 
-          {/* Helper tip */}
           <div className="px-8 mt-2">
             <p className="font-mono text-sm text-slate-400">
               tip: be specific — grade, topic, question count, visuals
             </p>
           </div>
 
-          {/* Reference upload row */}
           <div className="px-8 mt-4">
             <input
               type="file"
@@ -195,10 +216,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* Divider */}
           <div className="mt-5 border-t border-slate-100" />
 
-          {/* row: examples + generate btn */}
           <div className="flex flex-col gap-4 px-8 py-5">
             <Button
               onClick={generateWorksheet}
@@ -222,7 +241,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* small footer */}
         <p className="font-mono text-xs text-slate-300 text-center mt-16">
           Prompt2Print · generated with claude
         </p>
