@@ -1,8 +1,9 @@
 """Credits RPC wrapper.
 
-Calls the Supabase Postgres functions we defined in the migration:
+Calls the Supabase Postgres functions we defined in the migrations:
   - deduct_credit(user_id, reason, metadata) -> bool
   - add_credits(user_id, amount, reason, metadata) -> bool
+  - record_purchase(...) -> 'recorded' | 'already_processed'
 
 Uses the service role key so RLS is bypassed. Never expose this key to the
 frontend.
@@ -107,5 +108,41 @@ def refund_credit(user_id: str, reason: str, metadata: Optional[dict] = None) ->
         if not ok:
             log.error("Refund failed for user=%s reason=%s", user_id, reason)
     except Exception:
-        # Never let a refund failure mask the original error to the client.
         log.exception("Refund threw unexpectedly for user=%s", user_id)
+
+
+def record_purchase(
+    user_id: str,
+    order_id: str,
+    variant_id: str,
+    credits: int,
+    total_cents: int,
+    currency: str = "USD",
+    raw_payload: Optional[dict] = None,
+) -> str:
+    """Record a purchase in the purchases table. Idempotent via unique constraint
+    on provider_order_id.
+
+    Returns:
+      'recorded'          - newly inserted; caller should grant credits
+      'already_processed' - duplicate webhook; caller should NOT re-grant credits
+    """
+    resp = _rpc(
+        "record_purchase",
+        {
+            "p_user_id": user_id,
+            "p_order_id": order_id,
+            "p_variant_id": variant_id,
+            "p_credits": credits,
+            "p_total_cents": total_cents,
+            "p_currency": currency,
+            "p_raw_payload": raw_payload or {},
+        },
+    )
+    if resp.status_code != 200:
+        log.error("record_purchase RPC failed: %s %s", resp.status_code, resp.text[:200])
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Purchase record service error",
+        )
+    return resp.json()  # 'recorded' or 'already_processed'

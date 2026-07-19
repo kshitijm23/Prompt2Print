@@ -3,18 +3,18 @@
 import sys
 import traceback
 
-# Diagnostic import guard: print full traceback if any import fails
 try:
     import base64
+    import json
     import logging
 
-    from fastapi import Depends, FastAPI, File, Form, Response, UploadFile
+    from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
 
     from auth import get_current_user_id
     from compile_latex import compile_latex
-    from credits import refund_credit, require_and_deduct_credit
+    from credits import add_credits, record_purchase, refund_credit, require_and_deduct_credit
     from generator import (
         edit_latex,
         fix_latex,
@@ -22,6 +22,7 @@ try:
         generate_from_reference,
         generate_latex,
     )
+    from lemonsqueezy import parse_order_created, verify_signature
 except Exception:
     print("=" * 60, flush=True)
     print("MAIN.PY IMPORT FAILED — real traceback below:", flush=True)
@@ -65,8 +66,8 @@ class GenerateRequest(BaseModel):
 class EditRequest(BaseModel):
     latex: str
     instruction: str
-    prompt: str = ""  # original prompt, needed for regenerate-fallback
-    style: str = "rich"  # inherited from current worksheet
+    prompt: str = ""
+    style: str = "rich"
 
 
 @app.get("/")
@@ -83,12 +84,83 @@ def _pdf_response_full(pdf_bytes: bytes, mode: str, latex: str, edit_mode: str =
     }
     if edit_mode:
         headers["X-Edit-Mode"] = edit_mode
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers=headers,
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+
+
+# ---------- LemonSqueezy webhook (public, HMAC-verified) ----------
+
+@app.post("/lemonsqueezy-webhook")
+async def lemonsqueezy_webhook(request: Request):
+    """Handle LemonSqueezy order_created webhooks.
+
+    - Verifies HMAC-SHA256 signature (rejects invalid).
+    - Extracts user_id from checkout custom data.
+    - Idempotent: same order_id won't grant credits twice.
+    - Records to purchases table + calls add_credits RPC.
+    """
+    raw_body = await request.body()
+    signature = request.headers.get("X-Signature", "")
+
+    if not verify_signature(raw_body, signature):
+        log.warning("LemonSqueezy webhook: invalid signature")
+        return Response(status_code=401, content="Invalid signature")
+
+    try:
+        payload = json.loads(raw_body)
+    except Exception:
+        log.exception("LemonSqueezy webhook: invalid JSON")
+        return Response(status_code=400, content="Invalid JSON")
+
+    parsed = parse_order_created(payload)
+    log.info(
+        "LemonSqueezy webhook: event=%s order=%s user=%s variant=%s credits=%d",
+        parsed["event_name"], parsed["order_id"], parsed["user_id"],
+        parsed["variant_id"], parsed["credits"],
     )
 
+    if parsed["event_name"] != "order_created":
+        # We only handle order_created; ack others so LemonSqueezy stops retrying.
+        return {"status": "ignored", "event": parsed["event_name"]}
+
+    if not parsed["user_id"]:
+        log.error("Missing user_id in custom_data for order %s", parsed["order_id"])
+        # Return 200 so LemonSqueezy stops retrying (this is our bug, not theirs).
+        return {"status": "error", "reason": "missing_user_id"}
+
+    if parsed["credits"] <= 0:
+        log.error("Unknown variant_id %s for order %s", parsed["variant_id"], parsed["order_id"])
+        return {"status": "error", "reason": "unknown_variant"}
+
+    # Idempotency: record first, then grant. Same order_id twice -> already_processed.
+    status_str = record_purchase(
+        user_id=parsed["user_id"],
+        order_id=parsed["order_id"],
+        variant_id=parsed["variant_id"],
+        credits=parsed["credits"],
+        total_cents=parsed["total_cents"],
+        currency=parsed["currency"],
+        raw_payload=payload,
+    )
+    if status_str == "already_processed":
+        log.info("Order %s already processed; not re-granting credits.", parsed["order_id"])
+        return {"status": "already_processed"}
+
+    ok = add_credits(
+        parsed["user_id"],
+        parsed["credits"],
+        f"purchase_variant_{parsed['variant_id']}",
+        {"order_id": parsed["order_id"], "amount_cents": parsed["total_cents"]},
+    )
+    if not ok:
+        log.error("Failed to add credits for order %s", parsed["order_id"])
+        # Return 500 so LemonSqueezy retries; the record_purchase idempotency
+        # will protect against double-crediting on the retry.
+        return Response(status_code=500, content="Credit grant failed")
+
+    return {"status": "ok", "credits_granted": parsed["credits"]}
+
+
+# ---------- Worksheet endpoints ----------
 
 @app.post("/compile")
 def compile_endpoint(
@@ -127,7 +199,6 @@ def generate_endpoint(
         if result.ok and result.pdf_bytes:
             return _pdf_response_full(result.pdf_bytes, style, latex)
 
-        # Fallback path — plain, graphics-free, high-quality model
         fallback_latex = generate_fallback_latex(req.prompt)
         fb_result = compile_latex(fallback_latex)
         if not (fb_result.ok and fb_result.pdf_bytes):
@@ -164,7 +235,6 @@ def edit_endpoint(
     log.info("Editing worksheet with instruction: %s", req.instruction[:100])
     style = _normalize_style(req.style)
 
-    # Path A: patch the existing LaTeX
     latex = edit_latex(req.latex, req.instruction)
     result = compile_latex(latex)
 
@@ -178,7 +248,6 @@ def edit_endpoint(
     if result.ok and result.pdf_bytes:
         return _pdf_response_full(result.pdf_bytes, "edited", latex, edit_mode="patched")
 
-    # Path B: regenerate from merged prompt, preserving the worksheet's style
     log.info("Patch loop failed; falling back to regeneration (style=%s).", style)
     original = (req.prompt or "").strip()
     if original:
@@ -199,7 +268,6 @@ def edit_endpoint(
     if regen_result.ok and regen_result.pdf_bytes:
         return _pdf_response_full(regen_result.pdf_bytes, "edited", regen_latex, edit_mode="regenerated")
 
-    # Final fallback: plain LaTeX so at least something comes back
     plain_latex = generate_fallback_latex(merged_prompt)
     plain_result = compile_latex(plain_latex)
     if not (plain_result.ok and plain_result.pdf_bytes):

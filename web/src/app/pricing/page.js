@@ -1,10 +1,20 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
+
+// LemonSqueezy checkout URLs (variant UUIDs).
+// The user_id is appended at click time so the webhook knows who to credit.
+const CHECKOUT_STARTER =
+  "https://prompt2print.lemonsqueezy.com/checkout/buy/347687dd-9ffc-494c-b226-506bae31a155";
+const CHECKOUT_CLASSROOM =
+  "https://prompt2print.lemonsqueezy.com/checkout/buy/8fa14c88-4bc2-4f9c-95bb-70d5b690ab66";
 
 const TIERS = [
   {
+    key: "free",
     name: "Free",
     price: "$0",
     credits: 5,
@@ -17,11 +27,12 @@ const TIERS = [
     ],
     cta: "Included with signup",
     ctaDisabled: true,
-    accent: "slate",
+    checkoutUrl: null,
   },
   {
+    key: "starter",
     name: "Starter",
-    price: "$10",
+    price: "$9.99",
     credits: 20,
     tagline: "For occasional use",
     features: [
@@ -30,12 +41,13 @@ const TIERS = [
       "Unlimited edits",
       "Save to library",
     ],
-    cta: "Coming soon",
-    ctaDisabled: true,
-    accent: "slate",
+    cta: "Buy 20 worksheets →",
+    ctaDisabled: false,
+    checkoutUrl: CHECKOUT_STARTER,
     highlighted: true,
   },
   {
+    key: "classroom",
     name: "Classroom",
     price: "$40",
     credits: 100,
@@ -47,18 +59,42 @@ const TIERS = [
       "Save to library",
       "Best value per worksheet",
     ],
-    cta: "Coming soon",
-    ctaDisabled: true,
-    accent: "slate",
+    cta: "Buy 100 worksheets →",
+    ctaDisabled: false,
+    checkoutUrl: CHECKOUT_CLASSROOM,
   },
 ];
 
 export default function Pricing() {
   const router = useRouter();
+  const supabase = createClient();
+  const [userId, setUserId] = useState(null);
+  const [userEmail, setUserEmail] = useState(null);
+  const [busyKey, setBusyKey] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data.user) {
+        setUserId(data.user.id);
+        setUserEmail(data.user.email);
+      }
+    })();
+  }, [supabase]);
+
+  function goToCheckout(tier) {
+    if (!tier.checkoutUrl || !userId) return;
+    setBusyKey(tier.key);
+    // Attach the Supabase user_id as custom data so the webhook can identify who to credit.
+    // Also prefill email for a smoother checkout.
+    const url = new URL(tier.checkoutUrl);
+    url.searchParams.set("checkout[custom][user_id]", userId);
+    if (userEmail) url.searchParams.set("checkout[email]", userEmail);
+    window.location.href = url.toString();
+  }
 
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
-      {/* soft gradient */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[600px]"
@@ -68,7 +104,6 @@ export default function Pricing() {
         }}
       />
 
-      {/* slim top bar */}
       <div className="relative border-b border-slate-200 bg-white/70 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <button
@@ -87,7 +122,6 @@ export default function Pricing() {
         </div>
       </div>
 
-      {/* Hero */}
       <div className="relative max-w-5xl mx-auto px-6 pt-16 pb-8 text-center">
         <p className="font-mono text-[11px] tracking-wider text-slate-500 uppercase mb-3">
           Pricing
@@ -100,59 +134,62 @@ export default function Pricing() {
         </p>
       </div>
 
-      {/* Tiers */}
       <div className="relative max-w-6xl mx-auto px-6 pb-24">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {TIERS.map((tier) => (
-            <div
-              key={tier.name}
-              className={`relative rounded-2xl border bg-white p-7 flex flex-col ${
-                tier.highlighted
-                  ? "border-slate-900 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_60px_-15px_rgba(15,23,42,0.2)]"
-                  : "border-slate-200 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)]"
-              }`}
-            >
-              {tier.highlighted && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-slate-900 text-white font-mono text-[10px] tracking-wider uppercase">
-                  Most popular
-                </div>
-              )}
-              <p className="font-mono text-[11px] tracking-wider text-slate-500 uppercase mb-2">
-                {tier.name}
-              </p>
-              <div className="flex items-baseline gap-2 mb-1">
-                <span className="font-display text-[40px] leading-none text-slate-900">
-                  {tier.price}
-                </span>
-              </div>
-              <p className="text-sm text-slate-500 mb-6">{tier.tagline}</p>
-              <div className="mb-6">
-                <p className="font-display text-[24px] leading-none text-slate-900">
-                  {tier.credits} worksheets
-                </p>
-              </div>
-              <ul className="space-y-2 mb-7 flex-1">
-                {tier.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm text-slate-700">
-                    <svg className="h-4 w-4 text-emerald-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              <Button
-                disabled={tier.ctaDisabled}
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+          {TIERS.map((tier) => {
+            const isBusy = busyKey === tier.key;
+            return (
+              <div
+                key={tier.key}
+                className={`relative rounded-2xl border bg-white p-7 flex flex-col ${
+                  tier.highlighted
+                    ? "border-slate-900 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_60px_-15px_rgba(15,23,42,0.2)]"
+                    : "border-slate-200 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)]"
+                }`}
               >
-                {tier.cta}
-              </Button>
-            </div>
-          ))}
+                {tier.highlighted && (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-slate-900 text-white font-mono text-[10px] tracking-wider uppercase">
+                    Most popular
+                  </div>
+                )}
+                <p className="font-mono text-[11px] tracking-wider text-slate-500 uppercase mb-2">
+                  {tier.name}
+                </p>
+                <div className="flex items-baseline gap-2 mb-1">
+                  <span className="font-display text-[40px] leading-none text-slate-900">
+                    {tier.price}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-500 mb-6">{tier.tagline}</p>
+                <div className="mb-6">
+                  <p className="font-display text-[24px] leading-none text-slate-900">
+                    {tier.credits} worksheets
+                  </p>
+                </div>
+                <ul className="space-y-2 mb-7 flex-1">
+                  {tier.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-sm text-slate-700">
+                      <svg className="h-4 w-4 text-emerald-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  onClick={() => goToCheckout(tier)}
+                  disabled={tier.ctaDisabled || isBusy || !userId}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                >
+                  {isBusy ? "Redirecting…" : tier.cta}
+                </Button>
+              </div>
+            );
+          })}
         </div>
 
         <p className="font-mono text-xs text-slate-400 text-center mt-12">
-          Payments powered by LemonSqueezy · launching soon
+          Payments powered by LemonSqueezy · secure hosted checkout
         </p>
       </div>
     </main>
