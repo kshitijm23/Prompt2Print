@@ -1,20 +1,31 @@
-﻿"""Turns a teacher''s plain-language prompt into compilable worksheet LaTeX.
+﻿"""Turns a teacher's plain-language prompt into compilable worksheet LaTeX.
 
-Provider-agnostic by design: only generate_latex() knows it''s Claude.
-Swap the body of that function to change providers later.
+Two output styles:
+  - "rich"  : colorful, boxed, TikZ diagrams — the current default
+  - "plain" : traditional classroom exam paper, no color, no boxes, no graphics
+
+Model tiering:
+  - Rich generation, fix, fallback, reference : Opus 4.7 (quality)
+  - Plain generation, plain fix               : Haiku 4.5 (cheap, plain LaTeX is easy)
+  - Edit patch                                : Haiku 4.5 (small delta, cheap)
+  - Edit regenerate fallback                  : reuses generate_latex, respects style
 """
 
 import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-load_dotenv()  # reads ANTHROPIC_API_KEY from the .env file
+load_dotenv()
 
-_client = Anthropic()  # picks up the key from the environment
-_MODEL = "claude-opus-4-7"
+_client = Anthropic()
 
-# The fixed, known-good preamble. Claude fills the body; we control the rest.
-_SYSTEM_PROMPT = r"""You are a worksheet-generating engine for teachers.
+_MODEL_RICH = "claude-opus-4-7"
+_MODEL_PLAIN = "claude-haiku-4-5"
+
+
+# ---------- Rich style: colorful, boxed, diagrams ----------
+
+_SYSTEM_PROMPT_RICH = r"""You are a worksheet-generating engine for teachers.
 You output ONLY valid, compilable LaTeX — no markdown fences, no commentary,
 no explanation before or after. Your entire response must be a complete LaTeX
 document that compiles with pdflatex/latexmk.
@@ -46,26 +57,84 @@ Rules:
 """
 
 
-def generate_latex(prompt: str) -> str:
-    """Send the teacher''s request to Claude, return LaTeX source."""
+# ---------- Plain style: traditional exam paper, no color, no graphics ----------
+
+_SYSTEM_PROMPT_PLAIN = r"""You are a worksheet-generating engine for teachers.
+You output ONLY valid, compilable LaTeX — no markdown fences, no commentary,
+no explanation before or after. Your entire response must be a complete LaTeX
+document that compiles with pdflatex/latexmk.
+
+Style: Traditional classroom exam paper. Clean, plain, black-and-white.
+No colored boxes, no fancy borders, no decorative graphics. Serif type,
+generous whitespace, numbered questions, clean section headings.
+
+Always use exactly this preamble and structure:
+
+\documentclass[12pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{enumitem}
+\setlength{\parindent}{0pt}
+\pagestyle{empty}
+
+\begin{document}
+
+Layout template (adapt titles/subject/grade to the prompt):
+
+\begin{center}
+{\Large \bfseries [Worksheet Title]}\\[4pt]
+{\normalsize [Grade / Subject]}\\[10pt]
+\end{center}
+
+\noindent
+\textbf{Name:} \underline{\hspace{5cm}} \hfill \textbf{Date:} \underline{\hspace{3.5cm}}\\[6pt]
+\textbf{Class:} \underline{\hspace{5cm}} \hfill \textbf{Marks:} \underline{\hspace{3.5cm}}\\[14pt]
+
+\noindent \textit{Instructions:} [brief instruction line]
+
+\vspace{12pt}
+
+Then present questions. Use \section*{Part A: ...} for logical groupings.
+Use enumerate for the actual questions:
+
+\begin{enumerate}[label=\textbf{Q\arabic*.}, leftmargin=*, itemsep=16pt]
+  \item Question text here.
+  \item Another question.
+\end{enumerate}
+
+Rules:
+- Numbered questions with clear spacing (itemsep=14pt or more).
+- All math in proper LaTeX math mode.
+- NO color, NO tcolorbox, NO tikz, NO pgfplots. Text and math only.
+- Leave adequate blank space for student answers using \vspace or answer lines.
+- Use \noindent \rule{...}{0.4pt} or \underline{\hspace{Ncm}} for answer lines.
+- Keep it clean, formal, and printer-friendly.
+- Output the FULL document from \documentclass to \end{document}.
+"""
+
+
+def _system_prompt_for(style: str) -> str:
+    return _SYSTEM_PROMPT_PLAIN if style == "plain" else _SYSTEM_PROMPT_RICH
+
+
+def _model_for(style: str) -> str:
+    return _MODEL_PLAIN if style == "plain" else _MODEL_RICH
+
+
+def generate_latex(prompt: str, style: str = "rich") -> str:
+    """Send the teacher's request to Claude, return LaTeX source."""
     message = _client.messages.create(
-        model=_MODEL,
+        model=_model_for(style),
         max_tokens=4000,
-        system=_SYSTEM_PROMPT,
+        system=_system_prompt_for(style),
         messages=[{"role": "user", "content": prompt}],
     )
-    # The response is a list of content blocks; join the text ones.
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
 
 
-if __name__ == "__main__":
-    sample = "A grade 5 worksheet on adding fractions, 4 questions, with a visual model."
-    print(generate_latex(sample))
-
-
-def fix_latex(broken_latex: str, error_log: str) -> str:
+def fix_latex(broken_latex: str, error_log: str, style: str = "rich") -> str:
     """Ask Claude to repair LaTeX that failed to compile."""
     repair_prompt = (
         "The following LaTeX failed to compile. Fix it so it compiles cleanly "
@@ -74,16 +143,18 @@ def fix_latex(broken_latex: str, error_log: str) -> str:
         "\n\n=== COMPILER ERROR ===\n" + error_log
     )
     message = _client.messages.create(
-        model=_MODEL,
+        model=_model_for(style),
         max_tokens=4000,
-        system=_SYSTEM_PROMPT,
+        system=_system_prompt_for(style),
         messages=[{"role": "user", "content": repair_prompt}],
     )
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
 
-# A deliberately minimal preamble that is extremely unlikely to fail.
+
+# ---------- Bulletproof fallback: minimal, no graphics, any style ----------
+
 _FALLBACK_SYSTEM_PROMPT = r"""You are a worksheet-generating engine for teachers.
 Output ONLY valid, compilable LaTeX, no markdown fences, no commentary.
 Use ONLY this minimal, safe setup. Do NOT use tikz, pgfplots, or tcolorbox.
@@ -103,9 +174,11 @@ Rules:
 
 
 def generate_fallback_latex(prompt: str) -> str:
-    """Generate a plain, graphics-free worksheet that is very likely to compile."""
+    """Generate a plain, graphics-free worksheet that is very likely to compile.
+    Always uses the high-quality model — this is the last-resort safety net.
+    """
     message = _client.messages.create(
-        model=_MODEL,
+        model=_MODEL_RICH,
         max_tokens=4000,
         system=_FALLBACK_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -115,6 +188,7 @@ def generate_fallback_latex(prompt: str) -> str:
     ).strip()
 
 
+# ---------- Edit path: patch existing LaTeX ----------
 
 _EDIT_SYSTEM_PROMPT = """You are a LaTeX worksheet editor. You will be given:
 1. The existing worksheet as LaTeX
@@ -124,17 +198,20 @@ Modify the LaTeX to reflect the edit while keeping everything else intact.
 Output ONLY the complete, updated LaTeX document — no explanations, no
 markdown fences, nothing but the LaTeX from \\documentclass to \\end{document}.
 Preserve the existing structure, style, and any diagrams the teacher didn't
-ask to change."""
+ask to change. If the current worksheet is plain (no color, no boxes), stay
+plain. If it uses colored questionboxes and TikZ, keep that style."""
 
 
 def edit_latex(existing_latex: str, edit_instruction: str) -> str:
-    """Ask Claude to modify existing worksheet LaTeX based on an instruction."""
+    """Ask Claude to modify existing worksheet LaTeX based on an instruction.
+    Uses Haiku — patch edits are small deltas on existing content, cheap and reliable.
+    """
     user_msg = (
         "EXISTING WORKSHEET LATEX:\n" + existing_latex +
         "\n\nEDIT INSTRUCTION:\n" + edit_instruction
     )
     message = _client.messages.create(
-        model=_MODEL,
+        model=_MODEL_PLAIN,
         max_tokens=4000,
         system=_EDIT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
@@ -144,7 +221,9 @@ def edit_latex(existing_latex: str, edit_instruction: str) -> str:
     ).strip()
 
 
-_REFERENCE_SYSTEM_PROMPT = """You are a worksheet-generating engine for teachers.
+# ---------- Reference-based generation: study a PDF/image, produce similar ----------
+
+_REFERENCE_SYSTEM_PROMPT_RICH = """You are a worksheet-generating engine for teachers.
 You will receive:
 1. A REFERENCE document (PDF or image) — an existing worksheet the teacher likes.
 2. A NEW PROMPT describing the worksheet they want you to make.
@@ -164,13 +243,41 @@ Use the standard worksheet preamble with tcolorbox, tikz, xcolor, amsmath, etc.
 Wrap questions in questionbox environments and use tipbox for hints.
 """
 
+_REFERENCE_SYSTEM_PROMPT_PLAIN = """You are a worksheet-generating engine for teachers.
+You will receive:
+1. A REFERENCE document (PDF or image) — an existing worksheet the teacher likes.
+2. A NEW PROMPT describing the worksheet they want you to make.
 
-def generate_from_reference(file_bytes: bytes, media_type: str, prompt: str) -> str:
-    """Generate worksheet LaTeX from a reference file (PDF or image) plus a teacher prompt."""
+Study the reference for STRUCTURE and PEDAGOGY only (question count, type,
+topic, grade, difficulty). Do NOT copy its exact wording or visual style.
+
+Output a NEW worksheet in traditional classroom exam paper style — plain
+black-and-white, no color, no colored boxes, no TikZ. Serif type, numbered
+questions, generous whitespace, clean section headings.
+
+Use this preamble:
+
+\\documentclass[12pt]{article}
+\\usepackage[a4paper,margin=2.5cm]{geometry}
+\\usepackage{amsmath, amssymb}
+\\usepackage{enumitem}
+\\setlength{\\parindent}{0pt}
+\\pagestyle{empty}
+
+Include a Name/Date/Class header, brief instructions, and numbered questions
+using enumerate with itemsep=14pt or more.
+
+Output ONLY compilable LaTeX, no commentary, no markdown fences.
+"""
+
+
+def generate_from_reference(
+    file_bytes: bytes, media_type: str, prompt: str, style: str = "rich"
+) -> str:
+    """Generate worksheet LaTeX from a reference file plus a teacher prompt."""
     import base64 as _b64
     file_b64 = _b64.b64encode(file_bytes).decode("ascii")
 
-    # Pick the right content-block shape based on file type.
     is_pdf = media_type == "application/pdf"
     if is_pdf:
         reference_block = {
@@ -191,10 +298,18 @@ def generate_from_reference(file_bytes: bytes, media_type: str, prompt: str) -> 
             },
         }
 
+    system_prompt = (
+        _REFERENCE_SYSTEM_PROMPT_PLAIN if style == "plain"
+        else _REFERENCE_SYSTEM_PROMPT_RICH
+    )
+    # Reference generation always uses the high-quality model — multimodal reasoning
+    # (studying the reference's structure) is not something Haiku handles as reliably.
+    model = _MODEL_RICH
+
     message = _client.messages.create(
-        model=_MODEL,
+        model=model,
         max_tokens=4000,
-        system=_REFERENCE_SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[
             {
                 "role": "user",
@@ -208,3 +323,8 @@ def generate_from_reference(file_bytes: bytes, media_type: str, prompt: str) -> 
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
+
+
+if __name__ == "__main__":
+    sample = "A grade 5 worksheet on adding fractions, 4 questions, with a visual model."
+    print(generate_latex(sample, style="rich"))

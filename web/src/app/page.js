@@ -41,6 +41,7 @@ export default function Home() {
 
   const [prompt, setPrompt] = useState("");
   const [focused, setFocused] = useState(false);
+  const [style, setStyle] = useState("rich"); // "rich" | "plain"
   const [referenceFile, setReferenceFile] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -69,7 +70,9 @@ export default function Home() {
       sessionStorage.removeItem("p2p-ref-type");
       sessionStorage.removeItem("p2p-ref-size");
     }
-    router.push("/worksheet?p=" + encodeURIComponent(toUse));
+    router.push(
+      "/worksheet?p=" + encodeURIComponent(toUse) + "&style=" + style
+    );
   }
 
   return (
@@ -214,6 +217,44 @@ export default function Home() {
                 + attach a reference (PDF or image, optional)
               </button>
             )}
+          </div>
+
+          {/* Style picker */}
+          <div className="px-8 mt-5">
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
+                style
+              </span>
+              <div className="inline-flex p-0.5 bg-slate-100 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setStyle("rich")}
+                  className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition ${
+                    style === "rich"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  }`}
+                >
+                  Colorful
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStyle("plain")}
+                  className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition ${
+                    style === "plain"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  }`}
+                >
+                  Classic
+                </button>
+              </div>
+              <span className="font-mono text-xs text-slate-400">
+                {style === "rich"
+                  ? "diagrams, colored boxes, visual"
+                  : "traditional exam paper, no color"}
+              </span>
+            </div>
           </div>
 
           <div className="mt-5 border-t border-slate-100" />

@@ -13,8 +13,8 @@ const CACHE_KEY = "p2p-cache";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5;
 
-function makeCacheKey(prompt, refName, refSize) {
-  return `${(prompt || "").trim()}||${refName || "noref"}||${refSize || "0"}`;
+function makeCacheKey(prompt, refName, refSize, style) {
+  return `${(prompt || "").trim()}||${refName || "noref"}||${refSize || "0"}||${style || "rich"}`;
 }
 
 function cacheLookup(key) {
@@ -65,6 +65,7 @@ function WorksheetInner() {
   const searchParams = useSearchParams();
   const prompt = searchParams.get("p") || "";
   const savedId = searchParams.get("id") || "";
+  const style = (searchParams.get("style") || "rich").toLowerCase() === "plain" ? "plain" : "rich";
   const [displayPrompt, setDisplayPrompt] = useState(prompt);
 
   const [pdfUrl, setPdfUrl] = useState(null);
@@ -81,13 +82,10 @@ function WorksheetInner() {
   const [credits, setCredits] = useState(null);
   const [outOfCredits, setOutOfCredits] = useState(false);
 
-  // Guards against React StrictMode double-invoking the generation effect
-  // (which was causing 2 credits to be deducted per worksheet in dev).
   const hasStartedRef = useRef(false);
 
   const supabase = createClient();
 
-  // Get current user's JWT for Authorization header on all backend calls
   async function getAuthHeaders() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
@@ -198,8 +196,6 @@ function WorksheetInner() {
   }
 
   useEffect(() => {
-    // Guard against React StrictMode double-invocation in dev.
-    // Without this, the generation fires twice → 2 credits deducted per worksheet.
     if (hasStartedRef.current) return;
     hasStartedRef.current = true;
 
@@ -249,12 +245,12 @@ function WorksheetInner() {
         return;
       }
 
-      // Cache lookup (same prompt + same reference signature)
+      // Cache lookup — includes style so rich/plain of the same prompt cache separately
       const refNameForKey =
         typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
       const refSizeForKey =
         typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
-      const key = makeCacheKey(prompt, refNameForKey, refSizeForKey);
+      const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style);
       const cached = cacheLookup(key);
       if (cached) {
         setLatex(cached.latex);
@@ -294,6 +290,7 @@ function WorksheetInner() {
           const form = new FormData();
           form.append("prompt", prompt);
           form.append("reference", blob, refName);
+          form.append("style", style);
 
           setStatus("Reading your reference and generating...");
           response = await fetch(`${API_URL}/generate-from-reference`, {
@@ -310,7 +307,7 @@ function WorksheetInner() {
           response = await fetch(`${API_URL}/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeaders },
-            body: JSON.stringify({ prompt }),
+            body: JSON.stringify({ prompt, style }),
           });
         }
         if (!response.ok) {
@@ -324,8 +321,6 @@ function WorksheetInner() {
         }
         const { latex: gotLatex, blob: gotBlob } = await consumePdfResponse(response);
         setStatus("");
-
-        // Refresh credits pill after successful deduction
         await refetchCredits();
 
         if (gotLatex && gotBlob) {
@@ -356,7 +351,12 @@ function WorksheetInner() {
       const response = await fetch(`${API_URL}/edit-worksheet`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ latex, instruction, prompt: displayPrompt || prompt }),
+        body: JSON.stringify({
+          latex,
+          instruction,
+          prompt: displayPrompt || prompt,
+          style,
+        }),
       });
       if (!response.ok) {
         setEditError("Couldn't apply that edit — the underlying document couldn't be modified cleanly. Try a smaller change (e.g. one question at a time), or use \"+ new worksheet\" to start over. Your saved copy in the library is unchanged.");
@@ -367,14 +367,13 @@ function WorksheetInner() {
       setEditMode(mode);
       setEditNote("");
 
-      // Overwrite cache with edited version so refresh restores latest state
       if (!savedId && editedLatex && editedBlob) {
         try {
           const refNameForKey =
             typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
           const refSizeForKey =
             typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
-          const key = makeCacheKey(prompt, refNameForKey, refSizeForKey);
+          const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style);
           const pdfB64 = await blobToBase64(editedBlob);
           cacheStore(key, editedLatex, pdfB64);
         } catch {}
@@ -402,6 +401,9 @@ function WorksheetInner() {
               <span className="text-white font-display text-[11px] leading-none">P</span>
             </div>
             <span className="font-mono text-sm text-slate-900">Prompt2Print</span>
+            <span className="ml-2 font-mono text-[10px] tracking-wider text-slate-400 uppercase">
+              · {style === "plain" ? "classic" : "colorful"}
+            </span>
           </div>
           <div className="flex items-center gap-1">
             {pdfUrl && (
@@ -457,7 +459,6 @@ function WorksheetInner() {
       {/* Layout B */}
       <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-          {/* MAIN: PDF or out-of-credits card */}
           <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)] overflow-hidden relative">
             {outOfCredits ? (
               <div className="h-[800px] flex flex-col items-center justify-center px-8 text-center">
