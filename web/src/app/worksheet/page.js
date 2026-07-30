@@ -8,13 +8,24 @@ import { Textarea } from "@/components/ui/textarea";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-// ------- localStorage cache helpers -------
 const CACHE_KEY = "p2p-cache";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5;
 
-function makeCacheKey(prompt, refName, refSize, style) {
-  return `${(prompt || "").trim()}||${refName || "noref"}||${refSize || "0"}||${style || "rich"}`;
+const VALID_TEMPLATES = new Set([
+  "custom", "math_computation", "math_word_problems",
+  "reading_comprehension", "science", "vocabulary", "fill_in_blank",
+]);
+
+function makeCacheKey(prompt, refName, refSize, style, template, answerKey) {
+  return [
+    (prompt || "").trim(),
+    refName || "noref",
+    refSize || "0",
+    style || "rich",
+    template || "custom",
+    answerKey ? "ak1" : "ak0",
+  ].join("||");
 }
 
 function cacheLookup(key) {
@@ -24,9 +35,7 @@ function cacheLookup(key) {
     if (!raw) return null;
     const arr = JSON.parse(raw);
     const now = Date.now();
-    const hit = arr.find(
-      (e) => e.key === key && now - e.timestamp < CACHE_TTL_MS
-    );
+    const hit = arr.find((e) => e.key === key && now - e.timestamp < CACHE_TTL_MS);
     return hit || null;
   } catch {
     return null;
@@ -66,6 +75,10 @@ function WorksheetInner() {
   const prompt = searchParams.get("p") || "";
   const savedId = searchParams.get("id") || "";
   const style = (searchParams.get("style") || "rich").toLowerCase() === "plain" ? "plain" : "rich";
+  const templateParam = (searchParams.get("t") || "custom").toLowerCase();
+  const template = VALID_TEMPLATES.has(templateParam) ? templateParam : "custom";
+  const answerKey = searchParams.get("ak") === "1";
+
   const [displayPrompt, setDisplayPrompt] = useState(prompt);
 
   const [pdfUrl, setPdfUrl] = useState(null);
@@ -83,7 +96,6 @@ function WorksheetInner() {
   const [outOfCredits, setOutOfCredits] = useState(false);
 
   const hasStartedRef = useRef(false);
-
   const supabase = createClient();
 
   async function getAuthHeaders() {
@@ -139,10 +151,7 @@ function WorksheetInner() {
     setSaveStatus("saving");
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setSaveStatus("error");
-        return;
-      }
+      if (!user) { setSaveStatus("error"); return; }
       if (savedRowId) {
         const { error } = await supabase
           .from("worksheets")
@@ -182,9 +191,7 @@ function WorksheetInner() {
             .join("")
         );
         setLatex(decodedLatex);
-        if (savedRowId) {
-          setSaveStatus("dirty");
-        }
+        if (savedRowId) setSaveStatus("dirty");
       } catch {}
     }
     const blob = await response.blob();
@@ -204,7 +211,6 @@ function WorksheetInner() {
       return;
     }
     (async () => {
-      // Library load path
       if (savedId) {
         try {
           const { data, error } = await supabase
@@ -245,12 +251,11 @@ function WorksheetInner() {
         return;
       }
 
-      // Cache lookup — includes style so rich/plain of the same prompt cache separately
       const refNameForKey =
         typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
       const refSizeForKey =
         typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
-      const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style);
+      const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style, template, answerKey);
       const cached = cacheLookup(key);
       if (cached) {
         setLatex(cached.latex);
@@ -291,6 +296,8 @@ function WorksheetInner() {
           form.append("prompt", prompt);
           form.append("reference", blob, refName);
           form.append("style", style);
+          form.append("template", template);
+          form.append("answer_key", answerKey ? "true" : "false");
 
           setStatus("Reading your reference and generating...");
           response = await fetch(`${API_URL}/generate-from-reference`, {
@@ -307,7 +314,7 @@ function WorksheetInner() {
           response = await fetch(`${API_URL}/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeaders },
-            body: JSON.stringify({ prompt, style }),
+            body: JSON.stringify({ prompt, style, template, answer_key: answerKey }),
           });
         }
         if (!response.ok) {
@@ -356,6 +363,8 @@ function WorksheetInner() {
           instruction,
           prompt: displayPrompt || prompt,
           style,
+          template,
+          answer_key: answerKey,
         }),
       });
       if (!response.ok) {
@@ -373,7 +382,7 @@ function WorksheetInner() {
             typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-name") : "";
           const refSizeForKey =
             typeof window !== "undefined" ? sessionStorage.getItem("p2p-ref-size") : "";
-          const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style);
+          const key = makeCacheKey(prompt, refNameForKey, refSizeForKey, style, template, answerKey);
           const pdfB64 = await blobToBase64(editedBlob);
           cacheStore(key, editedLatex, pdfB64);
         } catch {}
@@ -385,9 +394,14 @@ function WorksheetInner() {
     }
   }
 
+  const modeLabel = [
+    style === "plain" ? "classic" : "colorful",
+    template !== "custom" ? template.replace(/_/g, " ") : null,
+    answerKey ? "with answer key" : null,
+  ].filter(Boolean).join(" · ");
+
   return (
     <main className="min-h-screen bg-[color:#FAFAF6]">
-      {/* slim top bar */}
       <div className="border-b border-slate-200 bg-white/70 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <button
@@ -396,14 +410,16 @@ function WorksheetInner() {
           >
             <span className="font-mono text-sm">← back</span>
           </button>
-          <div className="flex items-center gap-2">
-            <div className="h-5 w-5 rounded-md bg-slate-900 flex items-center justify-center">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-5 w-5 rounded-md bg-slate-900 flex items-center justify-center flex-shrink-0">
               <span className="text-white font-display text-[11px] leading-none">P</span>
             </div>
             <span className="font-mono text-sm text-slate-900">Prompt2Print</span>
-            <span className="ml-2 font-mono text-[10px] tracking-wider text-slate-400 uppercase">
-              · {style === "plain" ? "classic" : "colorful"}
-            </span>
+            {modeLabel && (
+              <span className="ml-2 font-mono text-[10px] tracking-wider text-slate-400 uppercase truncate">
+                · {modeLabel}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1">
             {pdfUrl && (
@@ -456,7 +472,6 @@ function WorksheetInner() {
         </div>
       </div>
 
-      {/* Layout B */}
       <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
           <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_20px_60px_-20px_rgba(15,23,42,0.08)] overflow-hidden relative">
@@ -519,7 +534,6 @@ function WorksheetInner() {
             )}
           </div>
 
-          {/* SIDEBAR */}
           <div className="flex flex-col gap-4">
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center gap-2 mb-3">

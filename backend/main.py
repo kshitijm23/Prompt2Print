@@ -48,10 +48,19 @@ app.add_middleware(
 
 MAX_FIX_ATTEMPTS = 3
 
+_VALID_TEMPLATES = {
+    "custom", "math_computation", "math_word_problems",
+    "reading_comprehension", "science", "vocabulary", "fill_in_blank",
+}
+
 
 def _normalize_style(style: str) -> str:
-    """Coerce anything except 'plain' back to 'rich'. Never trust client input."""
     return "plain" if (style or "").lower() == "plain" else "rich"
+
+
+def _normalize_template(template: str) -> str:
+    t = (template or "custom").lower()
+    return t if t in _VALID_TEMPLATES else "custom"
 
 
 class CompileRequest(BaseModel):
@@ -61,6 +70,8 @@ class CompileRequest(BaseModel):
 class GenerateRequest(BaseModel):
     prompt: str
     style: str = "rich"
+    template: str = "custom"
+    answer_key: bool = False
 
 
 class EditRequest(BaseModel):
@@ -68,16 +79,16 @@ class EditRequest(BaseModel):
     instruction: str
     prompt: str = ""
     style: str = "rich"
+    template: str = "custom"
+    answer_key: bool = False
 
 
 @app.get("/")
 def health():
-    """Public health check — Railway pings this. Do NOT require auth here."""
     return {"status": "ok", "service": "Prompt2Print API"}
 
 
 def _pdf_response_full(pdf_bytes: bytes, mode: str, latex: str, edit_mode: str = "") -> Response:
-    """Return PDF as body, send LaTeX as a base64 header so the client can keep it."""
     headers = {
         "X-Worksheet-Mode": mode,
         "X-Latex-B64": base64.b64encode(latex.encode("utf-8")).decode("ascii"),
@@ -91,13 +102,6 @@ def _pdf_response_full(pdf_bytes: bytes, mode: str, latex: str, edit_mode: str =
 
 @app.post("/lemonsqueezy-webhook")
 async def lemonsqueezy_webhook(request: Request):
-    """Handle LemonSqueezy order_created webhooks.
-
-    - Verifies HMAC-SHA256 signature (rejects invalid).
-    - Extracts user_id from checkout custom data.
-    - Idempotent: same order_id won't grant credits twice.
-    - Records to purchases table + calls add_credits RPC.
-    """
     raw_body = await request.body()
     signature = request.headers.get("X-Signature", "")
 
@@ -119,19 +123,16 @@ async def lemonsqueezy_webhook(request: Request):
     )
 
     if parsed["event_name"] != "order_created":
-        # We only handle order_created; ack others so LemonSqueezy stops retrying.
         return {"status": "ignored", "event": parsed["event_name"]}
 
     if not parsed["user_id"]:
         log.error("Missing user_id in custom_data for order %s", parsed["order_id"])
-        # Return 200 so LemonSqueezy stops retrying (this is our bug, not theirs).
         return {"status": "error", "reason": "missing_user_id"}
 
     if parsed["credits"] <= 0:
         log.error("Unknown variant_id %s for order %s", parsed["variant_id"], parsed["order_id"])
         return {"status": "error", "reason": "unknown_variant"}
 
-    # Idempotency: record first, then grant. Same order_id twice -> already_processed.
     status_str = record_purchase(
         user_id=parsed["user_id"],
         order_id=parsed["order_id"],
@@ -153,8 +154,6 @@ async def lemonsqueezy_webhook(request: Request):
     )
     if not ok:
         log.error("Failed to add credits for order %s", parsed["order_id"])
-        # Return 500 so LemonSqueezy retries; the record_purchase idempotency
-        # will protect against double-crediting on the retry.
         return Response(status_code=500, content="Credit grant failed")
 
     return {"status": "ok", "credits_granted": parsed["credits"]}
@@ -167,7 +166,6 @@ def compile_endpoint(
     req: CompileRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Compile raw LaTeX to PDF. Used to re-render saved worksheets from the library."""
     result = compile_latex(req.latex)
     if result.ok and result.pdf_bytes:
         return Response(content=result.pdf_bytes, media_type="application/pdf")
@@ -181,29 +179,34 @@ def generate_endpoint(
     user_id: str = Depends(get_current_user_id),
 ):
     style = _normalize_style(req.style)
+    template = _normalize_template(req.template)
+    answer_key = bool(req.answer_key)
+
     require_and_deduct_credit(
-        user_id, "generation", {"prompt": req.prompt[:200], "style": style}
+        user_id, "generation",
+        {"prompt": req.prompt[:200], "style": style,
+         "template": template, "answer_key": answer_key},
     )
 
     try:
-        latex = generate_latex(req.prompt, style=style)
+        latex = generate_latex(req.prompt, style=style, template=template, answer_key=answer_key)
         result = compile_latex(latex)
 
         attempts = 0
         while not (result.ok and result.pdf_bytes) and attempts < MAX_FIX_ATTEMPTS:
             error_log = "\n".join(result.log.splitlines()[-25:])
-            latex = fix_latex(latex, error_log, style=style)
+            latex = fix_latex(latex, error_log, style=style, answer_key=answer_key)
             result = compile_latex(latex)
             attempts += 1
 
         if result.ok and result.pdf_bytes:
             return _pdf_response_full(result.pdf_bytes, style, latex)
 
-        fallback_latex = generate_fallback_latex(req.prompt)
+        fallback_latex = generate_fallback_latex(req.prompt, answer_key=answer_key)
         fb_result = compile_latex(fallback_latex)
         if not (fb_result.ok and fb_result.pdf_bytes):
             error_log = "\n".join(fb_result.log.splitlines()[-25:])
-            fallback_latex = fix_latex(fallback_latex, error_log, style="plain")
+            fallback_latex = fix_latex(fallback_latex, error_log, style="plain", answer_key=answer_key)
             fb_result = compile_latex(fallback_latex)
 
         if fb_result.ok and fb_result.pdf_bytes:
@@ -234,6 +237,8 @@ def edit_endpoint(
     """Apply a conversational edit. Edits are free (no credit cost)."""
     log.info("Editing worksheet with instruction: %s", req.instruction[:100])
     style = _normalize_style(req.style)
+    template = _normalize_template(req.template)
+    answer_key = bool(req.answer_key)
 
     latex = edit_latex(req.latex, req.instruction)
     result = compile_latex(latex)
@@ -241,38 +246,38 @@ def edit_endpoint(
     attempts = 0
     while not (result.ok and result.pdf_bytes) and attempts < MAX_FIX_ATTEMPTS:
         error_log = "\n".join(result.log.splitlines()[-25:])
-        latex = fix_latex(latex, error_log, style=style)
+        latex = fix_latex(latex, error_log, style=style, answer_key=answer_key)
         result = compile_latex(latex)
         attempts += 1
 
     if result.ok and result.pdf_bytes:
         return _pdf_response_full(result.pdf_bytes, "edited", latex, edit_mode="patched")
 
-    log.info("Patch loop failed; falling back to regeneration (style=%s).", style)
+    log.info("Patch loop failed; regenerating (style=%s, template=%s, ak=%s).", style, template, answer_key)
     original = (req.prompt or "").strip()
     if original:
         merged_prompt = f"{original}\n\nAdditional requirement: {req.instruction.strip()}"
     else:
         merged_prompt = req.instruction.strip()
 
-    regen_latex = generate_latex(merged_prompt, style=style)
+    regen_latex = generate_latex(merged_prompt, style=style, template=template, answer_key=answer_key)
     regen_result = compile_latex(regen_latex)
 
     r_attempts = 0
     while not (regen_result.ok and regen_result.pdf_bytes) and r_attempts < MAX_FIX_ATTEMPTS:
         error_log = "\n".join(regen_result.log.splitlines()[-25:])
-        regen_latex = fix_latex(regen_latex, error_log, style=style)
+        regen_latex = fix_latex(regen_latex, error_log, style=style, answer_key=answer_key)
         regen_result = compile_latex(regen_latex)
         r_attempts += 1
 
     if regen_result.ok and regen_result.pdf_bytes:
         return _pdf_response_full(regen_result.pdf_bytes, "edited", regen_latex, edit_mode="regenerated")
 
-    plain_latex = generate_fallback_latex(merged_prompt)
+    plain_latex = generate_fallback_latex(merged_prompt, answer_key=answer_key)
     plain_result = compile_latex(plain_latex)
     if not (plain_result.ok and plain_result.pdf_bytes):
         error_log = "\n".join(plain_result.log.splitlines()[-25:])
-        plain_latex = fix_latex(plain_latex, error_log, style="plain")
+        plain_latex = fix_latex(plain_latex, error_log, style="plain", answer_key=answer_key)
         plain_result = compile_latex(plain_latex)
 
     if plain_result.ok and plain_result.pdf_bytes:
@@ -290,39 +295,45 @@ async def generate_from_reference_endpoint(
     prompt: str = Form(...),
     reference: UploadFile = File(...),
     style: str = Form("rich"),
+    template: str = Form("custom"),
+    answer_key: bool = Form(False),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Generate a worksheet using an uploaded reference PDF for structural guidance."""
-    log.info("Generating from reference: %s (style=%s)", reference.filename, style)
+    log.info("Generating from reference: %s (style=%s, template=%s, ak=%s)",
+             reference.filename, style, template, answer_key)
     file_bytes = await reference.read()
     style = _normalize_style(style)
+    template = _normalize_template(template)
+    answer_key = bool(answer_key)
 
     require_and_deduct_credit(
         user_id, "generation_from_reference",
-        {"prompt": prompt[:200], "style": style},
+        {"prompt": prompt[:200], "style": style,
+         "template": template, "answer_key": answer_key},
     )
 
     try:
         latex = generate_from_reference(
-            file_bytes, reference.content_type or "application/pdf", prompt, style=style
+            file_bytes, reference.content_type or "application/pdf", prompt,
+            style=style, template=template, answer_key=answer_key,
         )
         result = compile_latex(latex)
 
         attempts = 0
         while not (result.ok and result.pdf_bytes) and attempts < MAX_FIX_ATTEMPTS:
             error_log = "\n".join(result.log.splitlines()[-25:])
-            latex = fix_latex(latex, error_log, style=style)
+            latex = fix_latex(latex, error_log, style=style, answer_key=answer_key)
             result = compile_latex(latex)
             attempts += 1
 
         if result.ok and result.pdf_bytes:
             return _pdf_response_full(result.pdf_bytes, style, latex)
 
-        fallback_latex = generate_fallback_latex(prompt)
+        fallback_latex = generate_fallback_latex(prompt, answer_key=answer_key)
         fb_result = compile_latex(fallback_latex)
         if not (fb_result.ok and fb_result.pdf_bytes):
             error_log = "\n".join(fb_result.log.splitlines()[-25:])
-            fallback_latex = fix_latex(fallback_latex, error_log, style="plain")
+            fallback_latex = fix_latex(fallback_latex, error_log, style="plain", answer_key=answer_key)
             fb_result = compile_latex(fallback_latex)
 
         if fb_result.ok and fb_result.pdf_bytes:

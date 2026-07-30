@@ -7,10 +7,20 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 const EXAMPLES = [
-  "Grade 5 worksheet on adding fractions with bar models",
-  "Grade 8 worksheet on solving linear equations, 6 questions",
-  "Grade 3 addition worksheet with colorful question boxes",
-  "Grade 7 probability word problems, 5 questions",
+  "Grade 5 fractions review — 8 mixed problems for a Friday quiz",
+  "Grade 7 pre-algebra homework, 10 problems, mix of solving equations and word problems",
+  "Grade 3 addition and subtraction with regrouping, 15 problems, kid-friendly formatting",
+  "Middle school probability worksheet with real-world scenarios (dice, cards, weather)",
+];
+
+const TEMPLATES = [
+  { key: "custom", label: "Custom", hint: "free-form — describe anything" },
+  { key: "math_computation", label: "Math · Computation", hint: "procedural practice, show your work" },
+  { key: "math_word_problems", label: "Math · Word Problems", hint: "real-world contexts, with units" },
+  { key: "reading_comprehension", label: "Reading Comp.", hint: "short passage + questions" },
+  { key: "science", label: "Science", hint: "concepts, definitions, diagrams" },
+  { key: "vocabulary", label: "Vocabulary", hint: "word bank + mixed practice" },
+  { key: "fill_in_blank", label: "Fill-in-the-blank", hint: "sentences with blanks" },
 ];
 
 export default function Home() {
@@ -41,7 +51,9 @@ export default function Home() {
 
   const [prompt, setPrompt] = useState("");
   const [focused, setFocused] = useState(false);
-  const [style, setStyle] = useState("rich"); // "rich" | "plain"
+  const [style, setStyle] = useState("rich");
+  const [template, setTemplate] = useState("custom");
+  const [answerKey, setAnswerKey] = useState(false);
   const [referenceFile, setReferenceFile] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -70,10 +82,17 @@ export default function Home() {
       sessionStorage.removeItem("p2p-ref-type");
       sessionStorage.removeItem("p2p-ref-size");
     }
-    router.push(
-      "/worksheet?p=" + encodeURIComponent(toUse) + "&style=" + style
-    );
+
+    const params = new URLSearchParams({
+      p: toUse,
+      style,
+      t: template,
+    });
+    if (answerKey) params.set("ak", "1");
+    router.push("/worksheet?" + params.toString());
   }
+
+  const activeTemplate = TEMPLATES.find((t) => t.key === template) || TEMPLATES[0];
 
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
@@ -138,16 +157,16 @@ export default function Home() {
               Prompt2Print
             </p>
             <p className="font-mono text-[11px] tracking-wider text-slate-500 uppercase mt-1">
-              AI worksheet generator for teachers
+              built by a teacher, for teachers
             </p>
           </div>
         </div>
         <h1 className="font-display text-[52px] sm:text-[60px] leading-[0.95] tracking-tight text-slate-900">
-          Beautiful worksheets,<br />
-          <span className="italic text-slate-600">in seconds.</span>
+          Get your Sundays<br />
+          <span className="italic text-slate-600">back.</span>
         </h1>
         <p className="mt-8 text-slate-700 text-[17px] max-w-2xl leading-relaxed">
-          Describe what you need. Get a polished, print-ready PDF with diagrams, boxes, and clean math — no formatting required.
+          Describe the worksheet you'd normally spend an hour making. Get a print-ready PDF in under a minute — with an answer key if you need one.
         </p>
       </div>
 
@@ -173,7 +192,7 @@ export default function Home() {
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
               autoFocus
-              placeholder="e.g. a grade 6 worksheet on ratios with a real-world word problem and a bar-model diagram..."
+              placeholder="e.g. Grade 6 ratios review — 8 problems mixing tables, tape diagrams, and real-world questions"
               rows={5}
               className="!text-base sm:!text-lg lg:!text-xl leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
             />
@@ -181,11 +200,40 @@ export default function Home() {
 
           <div className="px-8 mt-2">
             <p className="font-mono text-sm text-slate-400">
-              tip: be specific — grade, topic, question count, visuals
+              tip: be specific — grade, topic, question count, what you want it to feel like
             </p>
           </div>
 
-          <div className="px-8 mt-4">
+          {/* Template picker */}
+          <div className="px-8 mt-5">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
+                template
+              </span>
+              <span className="font-mono text-xs text-slate-400">
+                {activeTemplate.hint}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATES.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setTemplate(t.key)}
+                  className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                    template === t.key
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Reference upload row */}
+          <div className="px-8 mt-5">
             <input
               type="file"
               ref={fileInputRef}
@@ -219,8 +267,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* Style picker */}
-          <div className="px-8 mt-5">
+          {/* Style + answer key options row */}
+          <div className="px-8 mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="flex items-center gap-3">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
                 style
@@ -249,12 +297,17 @@ export default function Home() {
                   Classic
                 </button>
               </div>
-              <span className="font-mono text-xs text-slate-400">
-                {style === "rich"
-                  ? "diagrams, colored boxes, visual"
-                  : "traditional exam paper, no color"}
-              </span>
             </div>
+
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={answerKey}
+                onChange={(e) => setAnswerKey(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+              />
+              <span className="text-sm text-slate-700">Include answer key</span>
+            </label>
           </div>
 
           <div className="mt-5 border-t border-slate-100" />
@@ -282,8 +335,8 @@ export default function Home() {
           </div>
         </div>
 
-        <p className="font-mono text-xs text-slate-300 text-center mt-16">
-          Prompt2Print · generated with claude
+        <p className="font-mono text-xs text-slate-400 text-center mt-16">
+          Built by a 7th-grade math teacher, for teachers who are tired of building worksheets at 10pm on a Sunday.
         </p>
       </div>
     </main>
