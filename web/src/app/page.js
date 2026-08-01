@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Suspense } from "react";
+import { startTour } from "@/lib/tour";
 
 const EXAMPLES = [
   "Grade 5 fractions review — 8 mixed problems for a Friday quiz",
@@ -34,10 +35,13 @@ function HomeInner() {
   const searchParams = useSearchParams();
   const supabase = createClient();
   const [userEmail, setUserEmail] = useState("");
+  const [userId, setUserId] = useState(null);
   const [credits, setCredits] = useState(null);
 
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
+
+  const tourRef = useRef(null);
 
   useEffect(() => {
     if (searchParams.get("purchase") === "success") {
@@ -51,19 +55,51 @@ function HomeInner() {
     }
   }, [searchParams]);
 
+  async function markTourSeen(uid) {
+    if (!uid) return;
+    try {
+      await supabase
+        .from("user_profiles")
+        .update({ has_seen_tour: true })
+        .eq("user_id", uid);
+    } catch (err) {
+      console.error("markTourSeen failed:", err);
+    }
+  }
+
+  function launchTour(uid) {
+    if (tourRef.current) {
+      try { tourRef.current.cancel(); } catch {}
+    }
+    tourRef.current = startTour({
+      onEnd: () => {
+        tourRef.current = null;
+        markTourSeen(uid);
+      },
+    });
+  }
+
   useEffect(() => {
     (async () => {
       const { data: userData } = await supabase.auth.getUser();
-      if (userData.user) {
-        setUserEmail(userData.user.email);
-        const { data: profile } = await supabase
-          .from("user_profiles")
-          .select("credits_remaining")
-          .eq("user_id", userData.user.id)
-          .single();
-        if (profile) setCredits(profile.credits_remaining);
+      if (!userData.user) return;
+      setUserEmail(userData.user.email);
+      setUserId(userData.user.id);
+
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("credits_remaining, has_seen_tour")
+        .eq("user_id", userData.user.id)
+        .single();
+      if (profile) {
+        setCredits(profile.credits_remaining);
+        if (!profile.has_seen_tour) {
+          // Small delay so page has fully rendered
+          setTimeout(() => launchTour(userData.user.id), 400);
+        }
       }
     })();
+
     function onVisible() {
       if (document.visibilityState === "visible") {
         supabase.auth.getUser().then(({ data: userData }) => {
@@ -81,6 +117,7 @@ function HomeInner() {
     }
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
 
   async function handleSignOut() {
@@ -151,6 +188,7 @@ function HomeInner() {
         <div className="absolute top-5 right-6 z-30 flex items-center gap-1">
           {credits !== null && (
             <button
+              data-tour="credits"
               onClick={() => router.push("/pricing")}
               className={`px-3 py-1.5 rounded-lg font-mono text-xs tracking-wider uppercase transition mr-1 ${
                 credits === 0
@@ -164,6 +202,16 @@ function HomeInner() {
               {credits} {credits === 1 ? "worksheet" : "worksheets"} left
             </button>
           )}
+          <button
+            onClick={() => launchTour(userId)}
+            className="h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"
+            title="Show me around"
+            aria-label="Show me around"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
           <button
             onClick={() => router.push("/library")}
             className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
@@ -231,7 +279,7 @@ function HomeInner() {
             <span className="font-mono text-xs text-slate-400">{prompt.length} chars</span>
           </div>
 
-          <div className="px-8">
+          <div data-tour="prompt" className="px-8">
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -250,7 +298,7 @@ function HomeInner() {
             </p>
           </div>
 
-          <div className="px-8 mt-5">
+          <div data-tour="templates" className="px-8 mt-5">
             <div className="flex items-center gap-3 mb-2">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
                 template
@@ -312,7 +360,7 @@ function HomeInner() {
           </div>
 
           <div className="px-8 mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <div className="flex items-center gap-3">
+            <div data-tour="style" className="flex items-center gap-3">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
                 style
               </span>
@@ -342,7 +390,10 @@ function HomeInner() {
               </div>
             </div>
 
-            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <label
+              data-tour="answer-key"
+              className="inline-flex items-center gap-2 cursor-pointer select-none"
+            >
               <input
                 type="checkbox"
                 checked={answerKey}
@@ -382,7 +433,7 @@ function HomeInner() {
           Built by a 7th-grade math teacher, for teachers who are tired of building worksheets at 10pm on a Sunday.
         </p>
 
-        {/* Footer with legal links */}
+        {/* Footer */}
         <footer className="mt-12 pb-8 border-t border-slate-200 pt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs text-slate-400">
           <span>© 2026 Prompt2Print</span>
           <button
@@ -408,14 +459,85 @@ function HomeInner() {
 
       <style jsx global>{`
         @keyframes slideDown {
-          from {
-            transform: translate(-50%, -20px);
-            opacity: 0;
-          }
-          to {
-            transform: translate(-50%, 0);
-            opacity: 1;
-          }
+          from { transform: translate(-50%, -20px); opacity: 0; }
+          to   { transform: translate(-50%, 0);     opacity: 1; }
+        }
+
+        /* Shepherd.js tour — Prompt2Print theme */
+        .p2p-shepherd.shepherd-element {
+          border-radius: 14px;
+          border: 1px solid rgb(226 232 240);
+          background: white;
+          box-shadow: 0 30px 80px -20px rgba(15, 23, 42, 0.25);
+          max-width: 400px;
+          font-family: inherit;
+        }
+        .p2p-shepherd .shepherd-header {
+          background: white;
+          border-radius: 14px 14px 0 0;
+          padding: 18px 22px 6px;
+        }
+        .p2p-shepherd .shepherd-title {
+          font-family: 'Instrument Serif', Georgia, serif;
+          font-size: 22px;
+          color: rgb(15 23 42);
+          font-weight: 400;
+          line-height: 1.2;
+        }
+        .p2p-shepherd .shepherd-text {
+          padding: 6px 22px 18px;
+          color: rgb(51 65 85);
+          font-size: 14px;
+          line-height: 1.6;
+        }
+        .p2p-shepherd .shepherd-text p {
+          margin: 0;
+        }
+        .p2p-shepherd .shepherd-footer {
+          padding: 12px 18px 14px;
+          border-top: 1px solid rgb(241 245 249);
+          display: flex;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+        .p2p-shepherd .shepherd-button {
+          padding: 8px 14px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 500;
+          transition: background 0.15s, color 0.15s;
+          border: none;
+          cursor: pointer;
+          margin: 0;
+        }
+        .p2p-shepherd-btn-primary {
+          background: rgb(15 23 42);
+          color: white;
+        }
+        .p2p-shepherd-btn-primary:hover {
+          background: rgb(30 41 59);
+        }
+        .p2p-shepherd-btn-secondary {
+          background: transparent;
+          color: rgb(100 116 139);
+        }
+        .p2p-shepherd-btn-secondary:hover {
+          color: rgb(15 23 42);
+          background: rgb(241 245 249);
+        }
+        .p2p-shepherd .shepherd-cancel-icon {
+          color: rgb(148 163 184);
+          font-size: 20px;
+        }
+        .p2p-shepherd .shepherd-cancel-icon:hover {
+          color: rgb(15 23 42);
+        }
+        .p2p-shepherd .shepherd-arrow:before {
+          background: white;
+          border: 1px solid rgb(226 232 240);
+        }
+        .shepherd-modal-overlay-container {
+          fill: rgba(15, 23, 42, 0.55);
         }
       `}</style>
     </main>
