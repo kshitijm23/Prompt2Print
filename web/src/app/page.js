@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Suspense } from "react";
 
 const EXAMPLES = [
   "Grade 5 fractions review — 8 mixed problems for a Friday quiz",
@@ -23,11 +24,35 @@ const TEMPLATES = [
   { key: "fill_in_blank", label: "Fill-in-the-blank", hint: "sentences with blanks" },
 ];
 
-export default function Home() {
+const PACK_LABELS = {
+  starter: "20 worksheets",
+  classroom: "100 worksheets",
+};
+
+function HomeInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const [userEmail, setUserEmail] = useState("");
   const [credits, setCredits] = useState(null);
+
+  // Post-purchase toast — triggered by ?purchase=success on the URL
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("purchase") === "success") {
+      const pack = searchParams.get("pack") || "";
+      const label = PACK_LABELS[pack] || "worksheets";
+      setToastMessage(`🎉 Success — ${label} added to your account`);
+      setShowToast(true);
+      // Clean the query params so a page refresh doesn't re-show
+      window.history.replaceState({}, "", "/");
+      // Auto-dismiss after 6 seconds
+      const t = setTimeout(() => setShowToast(false), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     (async () => {
@@ -42,6 +67,24 @@ export default function Home() {
         if (profile) setCredits(profile.credits_remaining);
       }
     })();
+    // Refetch credits when tab becomes visible again (e.g. returning from LemonSqueezy)
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        supabase.auth.getUser().then(({ data: userData }) => {
+          if (!userData.user) return;
+          supabase
+            .from("user_profiles")
+            .select("credits_remaining")
+            .eq("user_id", userData.user.id)
+            .single()
+            .then(({ data: profile }) => {
+              if (profile) setCredits(profile.credits_remaining);
+            });
+        });
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [supabase]);
 
   async function handleSignOut() {
@@ -83,11 +126,7 @@ export default function Home() {
       sessionStorage.removeItem("p2p-ref-size");
     }
 
-    const params = new URLSearchParams({
-      p: toUse,
-      style,
-      t: template,
-    });
+    const params = new URLSearchParams({ p: toUse, style, t: template });
     if (answerKey) params.set("ak", "1");
     router.push("/worksheet?" + params.toString());
   }
@@ -97,7 +136,22 @@ export default function Home() {
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
 
-      {/* top-right nav */}
+      {/* Success toast (post-purchase) */}
+      {showToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-[slideDown_0.3s_ease-out]">
+          <div className="flex items-center gap-3 px-5 py-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-[0px_20px_40px_-10px_rgba(15,23,42,0.15)]">
+            <span className="font-mono text-sm text-emerald-800">{toastMessage}</span>
+            <button
+              onClick={() => setShowToast(false)}
+              className="ml-2 text-emerald-600 hover:text-emerald-900 text-lg leading-none"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       {userEmail && (
         <div className="absolute top-5 right-6 z-30 flex items-center gap-1">
           {credits !== null && (
@@ -136,7 +190,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* soft hero gradient */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[600px]"
@@ -146,7 +199,6 @@ export default function Home() {
         }}
       />
 
-      {/* Hero */}
       <div className="relative max-w-6xl mx-auto px-6 pt-8 pb-8">
         <div className="flex items-center gap-3 mb-8">
           <div className="h-10 w-10 rounded-lg bg-slate-900 flex items-center justify-center">
@@ -170,7 +222,6 @@ export default function Home() {
         </p>
       </div>
 
-      {/* Generator - hero card */}
       <div className="relative max-w-6xl mx-auto px-6 pb-24">
         <div
           className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-300 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_70px_-15px_rgba(15,23,42,0.15)]"}`}
@@ -204,7 +255,6 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Template picker */}
           <div className="px-8 mt-5">
             <div className="flex items-center gap-3 mb-2">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
@@ -232,7 +282,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Reference upload row */}
           <div className="px-8 mt-5">
             <input
               type="file"
@@ -267,7 +316,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Style + answer key options row */}
           <div className="px-8 mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="flex items-center gap-3">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
@@ -339,6 +387,27 @@ export default function Home() {
           Built by a 7th-grade math teacher, for teachers who are tired of building worksheets at 10pm on a Sunday.
         </p>
       </div>
+
+      <style jsx global>{`
+        @keyframes slideDown {
+          from {
+            transform: translate(-50%, -20px);
+            opacity: 0;
+          }
+          to {
+            transform: translate(-50%, 0);
+            opacity: 1;
+          }
+        }
+      `}</style>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[color:#FAFAF6]" />}>
+      <HomeInner />
+    </Suspense>
   );
 }

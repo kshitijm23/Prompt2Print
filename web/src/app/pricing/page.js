@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 
-// LemonSqueezy checkout URLs (variant UUIDs).
-// The user_id is appended at click time so the webhook knows who to credit.
 const CHECKOUT_STARTER =
   "https://prompt2print.lemonsqueezy.com/checkout/buy/347687dd-9ffc-494c-b226-506bae31a155";
 const CHECKOUT_CLASSROOM =
@@ -85,11 +83,15 @@ export default function Pricing() {
   function goToCheckout(tier) {
     if (!tier.checkoutUrl || !userId) return;
     setBusyKey(tier.key);
-    // Attach the Supabase user_id as custom data so the webhook can identify who to credit.
-    // Also prefill email for a smoother checkout.
+    // Attach: user_id (webhook needs this), email prefill, redirect URL back to home
     const url = new URL(tier.checkoutUrl);
     url.searchParams.set("checkout[custom][user_id]", userId);
     if (userEmail) url.searchParams.set("checkout[email]", userEmail);
+    // success_url via `desc` field workaround — LemonSqueezy also supports checkout[success_url]
+    url.searchParams.set(
+      "checkout[success_url]",
+      `${window.location.origin}/?purchase=success&pack=${tier.key}`
+    );
     window.location.href = url.toString();
   }
 
