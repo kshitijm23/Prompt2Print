@@ -68,7 +68,8 @@ export default function Pricing() {
   const supabase = createClient();
   const [userId, setUserId] = useState(null);
   const [userEmail, setUserEmail] = useState(null);
-  const [busyKey, setBusyKey] = useState("");
+  const [credits, setCredits] = useState(null);
+  const [waitingKey, setWaitingKey] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -76,23 +77,51 @@ export default function Pricing() {
       if (data.user) {
         setUserId(data.user.id);
         setUserEmail(data.user.email);
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("credits_remaining")
+          .eq("user_id", data.user.id)
+          .single();
+        if (profile) setCredits(profile.credits_remaining);
       }
     })();
   }, [supabase]);
 
+  // When the user returns to this tab after checkout (in the other tab),
+  // refetch credits. If they went up, they successfully purchased.
+  useEffect(() => {
+    async function refetch() {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) return;
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("credits_remaining")
+        .eq("user_id", userData.user.id)
+        .single();
+      if (profile) setCredits(profile.credits_remaining);
+    }
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        refetch();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refetch);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", refetch);
+    };
+  }, [supabase]);
+
   function goToCheckout(tier) {
     if (!tier.checkoutUrl || !userId) return;
-    setBusyKey(tier.key);
-    // Attach: user_id (webhook needs this), email prefill, redirect URL back to home
+    setWaitingKey(tier.key);
     const url = new URL(tier.checkoutUrl);
     url.searchParams.set("checkout[custom][user_id]", userId);
     if (userEmail) url.searchParams.set("checkout[email]", userEmail);
-    // success_url via `desc` field workaround — LemonSqueezy also supports checkout[success_url]
-    url.searchParams.set(
-      "checkout[success_url]",
-      `${window.location.origin}/?purchase=success&pack=${tier.key}`
-    );
-    window.location.href = url.toString();
+    // Open checkout in a new tab. When the user closes it (paid or not) and
+    // returns to this tab, the visibility listener refetches credits.
+    window.open(url.toString(), "_blank", "noopener");
   }
 
   return (
@@ -120,7 +149,16 @@ export default function Pricing() {
             </div>
             <span className="font-mono text-sm text-slate-900">Prompt2Print</span>
           </div>
-          <div />
+          <div>
+            {credits !== null && (
+              <button
+                onClick={() => router.push("/")}
+                className="px-3 py-1.5 rounded-lg font-mono text-xs tracking-wider text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+              >
+                {credits} left
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -134,12 +172,19 @@ export default function Pricing() {
         <p className="mt-6 text-slate-700 text-[17px] max-w-xl mx-auto leading-relaxed">
           Every generation costs one worksheet. Edits are free — iterate as much as you like.
         </p>
+        {waitingKey && (
+          <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 border border-emerald-200">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="font-mono text-xs text-emerald-800">
+              Checkout opened in a new tab. Come back here when you're done — your credits will update automatically.
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="relative max-w-6xl mx-auto px-6 pb-24">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {TIERS.map((tier) => {
-            const isBusy = busyKey === tier.key;
             return (
               <div
                 key={tier.key}
@@ -180,10 +225,10 @@ export default function Pricing() {
                 </ul>
                 <Button
                   onClick={() => goToCheckout(tier)}
-                  disabled={tier.ctaDisabled || isBusy || !userId}
+                  disabled={tier.ctaDisabled || !userId}
                   className="w-full bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                 >
-                  {isBusy ? "Redirecting…" : tier.cta}
+                  {tier.cta}
                 </Button>
               </div>
             );
