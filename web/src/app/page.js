@@ -36,7 +36,6 @@ function HomeInner() {
   const [userEmail, setUserEmail] = useState("");
   const [credits, setCredits] = useState(null);
 
-  // Post-purchase toast — triggered by ?purchase=success on the URL
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
 
@@ -46,9 +45,7 @@ function HomeInner() {
       const label = PACK_LABELS[pack] || "worksheets";
       setToastMessage(`🎉 Success — ${label} added to your account`);
       setShowToast(true);
-      // Clean the query params so a page refresh doesn't re-show
       window.history.replaceState({}, "", "/");
-      // Auto-dismiss after 6 seconds
       const t = setTimeout(() => setShowToast(false), 6000);
       return () => clearTimeout(t);
     }
@@ -67,7 +64,6 @@ function HomeInner() {
         if (profile) setCredits(profile.credits_remaining);
       }
     })();
-    // Refetch credits when tab becomes visible again (e.g. returning from LemonSqueezy)
     function onVisible() {
       if (document.visibilityState === "visible") {
         supabase.auth.getUser().then(({ data: userData }) => {
@@ -136,7 +132,6 @@ function HomeInner() {
   return (
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
 
-      {/* Success toast (post-purchase) */}
       {showToast && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-[slideDown_0.3s_ease-out]">
           <div className="flex items-center gap-3 px-5 py-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-[0px_20px_40px_-10px_rgba(15,23,42,0.15)]">
@@ -222,7 +217,7 @@ function HomeInner() {
         </p>
       </div>
 
-      <div className="relative max-w-6xl mx-auto px-6 pb-24">
+      <div className="relative max-w-6xl mx-auto px-6 pb-12">
         <div
           className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-300 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_70px_-15px_rgba(15,23,42,0.15)]"}`}
         >
@@ -386,6 +381,29 @@ function HomeInner() {
         <p className="font-mono text-xs text-slate-400 text-center mt-16">
           Built by a 7th-grade math teacher, for teachers who are tired of building worksheets at 10pm on a Sunday.
         </p>
+
+        {/* Footer with legal links */}
+        <footer className="mt-12 pb-8 border-t border-slate-200 pt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs text-slate-400">
+          <span>© 2026 Prompt2Print</span>
+          <button
+            onClick={() => router.push("/terms")}
+            className="hover:text-slate-700 transition underline underline-offset-2"
+          >
+            Terms
+          </button>
+          <button
+            onClick={() => router.push("/privacy")}
+            className="hover:text-slate-700 transition underline underline-offset-2"
+          >
+            Privacy
+          </button>
+          <a
+            href="mailto:kshitijmisc@gmail.com"
+            className="hover:text-slate-700 transition underline underline-offset-2"
+          >
+            Contact
+          </a>
+        </footer>
       </div>
 
       <style jsx global>{`

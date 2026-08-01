@@ -3,7 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 
 /**
  * Route auth gate:
- *  - /login is always public
+ *  - /login, /auth, /terms, /privacy are public
  *  - everything else requires a signed-in Supabase user
  *  - if not signed in, redirect to /login
  */
@@ -11,7 +11,12 @@ export async function middleware(request) {
   const { pathname } = request.nextUrl;
 
   // Public routes
-  if (pathname.startsWith("/login") || pathname.startsWith("/auth")) {
+  if (
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/auth") ||
+    pathname.startsWith("/terms") ||
+    pathname.startsWith("/privacy")
+  ) {
     return NextResponse.next();
   }
 
