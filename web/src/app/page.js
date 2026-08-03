@@ -37,6 +37,7 @@ function HomeInner() {
   const [userEmail, setUserEmail] = useState("");
   const [userId, setUserId] = useState(null);
   const [credits, setCredits] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
@@ -55,13 +56,19 @@ function HomeInner() {
     }
   }, [searchParams]);
 
+  // Close user menu when clicking outside
+  useEffect(() => {
+    function handleClick(e) {
+      if (!e.target.closest("[data-user-menu]")) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
   async function markTourSeen(uid) {
     if (!uid) return;
     try {
-      await supabase
-        .from("user_profiles")
-        .update({ has_seen_tour: true })
-        .eq("user_id", uid);
+      await supabase.from("user_profiles").update({ has_seen_tour: true }).eq("user_id", uid);
     } catch (err) {
       console.error("markTourSeen failed:", err);
     }
@@ -94,7 +101,6 @@ function HomeInner() {
       if (profile) {
         setCredits(profile.credits_remaining);
         if (!profile.has_seen_tour) {
-          // Small delay so page has fully rendered
           setTimeout(() => launchTour(userData.user.id), 400);
         }
       }
@@ -170,12 +176,12 @@ function HomeInner() {
     <main className="relative min-h-screen bg-[color:#FAFAF6] overflow-hidden">
 
       {showToast && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-[slideDown_0.3s_ease-out]">
-          <div className="flex items-center gap-3 px-5 py-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-[0px_20px_40px_-10px_rgba(15,23,42,0.15)]">
-            <span className="font-mono text-sm text-emerald-800">{toastMessage}</span>
+        <div className="fixed top-4 left-2 right-2 sm:top-6 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-[slideDown_0.3s_ease-out]">
+          <div className="flex items-center gap-3 px-4 sm:px-5 py-3 bg-emerald-50 border border-emerald-200 rounded-xl shadow-[0px_20px_40px_-10px_rgba(15,23,42,0.15)] max-w-full">
+            <span className="font-mono text-xs sm:text-sm text-emerald-800 truncate">{toastMessage}</span>
             <button
               onClick={() => setShowToast(false)}
-              className="ml-2 text-emerald-600 hover:text-emerald-900 text-lg leading-none"
+              className="ml-auto text-emerald-600 hover:text-emerald-900 text-lg leading-none flex-shrink-0"
               aria-label="Dismiss"
             >
               ×
@@ -185,12 +191,12 @@ function HomeInner() {
       )}
 
       {userEmail && (
-        <div className="absolute top-5 right-6 z-30 flex items-center gap-1">
+        <div className="absolute top-3 right-3 sm:top-5 sm:right-6 z-30 flex items-center gap-1">
           {credits !== null && (
             <button
               data-tour="credits"
               onClick={() => router.push("/pricing")}
-              className={`px-3 py-1.5 rounded-lg font-mono text-xs tracking-wider uppercase transition mr-1 ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-mono text-[10px] sm:text-xs tracking-wider uppercase transition ${
                 credits === 0
                   ? "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
                   : credits <= 2
@@ -199,12 +205,14 @@ function HomeInner() {
               }`}
               title="View pricing"
             >
-              {credits} {credits === 1 ? "worksheet" : "worksheets"} left
+              {credits} <span className="hidden sm:inline">{credits === 1 ? "worksheet" : "worksheets"} </span>left
             </button>
           )}
+
+          {/* Desktop-only inline nav items */}
           <button
             onClick={() => launchTour(userId)}
-            className="h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"
+            className="hidden sm:flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"
             title="Show me around"
             aria-label="Show me around"
           >
@@ -214,21 +222,61 @@ function HomeInner() {
           </button>
           <button
             onClick={() => router.push("/library")}
-            className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+            className="hidden sm:inline-flex px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
           >
             Library
           </button>
           <button
             onClick={handleSignOut}
-            className="px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
+            className="hidden sm:inline-flex px-3.5 py-2 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition"
           >
             Sign out
           </button>
-          <div
-            className="ml-1 h-9 w-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm shadow-[0px_2px_8px_rgba(15,23,42,0.15)]"
-            title={userEmail}
-          >
-            {userEmail.charAt(0).toUpperCase()}
+
+          {/* Avatar — always visible. On mobile it opens a dropdown menu. */}
+          <div className="relative ml-1" data-user-menu>
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="h-9 w-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm shadow-[0px_2px_8px_rgba(15,23,42,0.15)] hover:bg-slate-800 transition"
+              title={userEmail}
+              aria-label="Account menu"
+            >
+              {userEmail.charAt(0).toUpperCase()}
+            </button>
+
+            {menuOpen && (
+              <div className="absolute right-0 top-11 w-52 bg-white border border-slate-200 rounded-xl shadow-[0_20px_40px_-10px_rgba(15,23,42,0.2)] py-1 z-50">
+                <div className="px-4 pt-2 pb-1 border-b border-slate-100 mb-1">
+                  <p className="font-mono text-[10px] tracking-wider text-slate-400 uppercase">Signed in as</p>
+                  <p className="text-xs text-slate-700 truncate">{userEmail}</p>
+                </div>
+                <button
+                  onClick={() => { setMenuOpen(false); router.push("/library"); }}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 sm:hidden"
+                >
+                  Library
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); router.push("/pricing"); }}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Pricing
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); launchTour(userId); }}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Show me around
+                </button>
+                <div className="my-1 border-t border-slate-100" />
+                <button
+                  onClick={() => { setMenuOpen(false); handleSignOut(); }}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -242,34 +290,36 @@ function HomeInner() {
         }}
       />
 
-      <div className="relative max-w-6xl mx-auto px-6 pt-8 pb-8">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="h-10 w-10 rounded-lg bg-slate-900 flex items-center justify-center">
-            <span className="text-white font-display text-[22px] leading-none">P</span>
+      {/* Hero — added extra top padding on mobile to clear the absolute-positioned nav */}
+      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-8 pb-6 sm:pb-8">
+        <div className="flex items-center gap-3 mb-6 sm:mb-8">
+          <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-lg bg-slate-900 flex items-center justify-center flex-shrink-0">
+            <span className="text-white font-display text-[20px] sm:text-[22px] leading-none">P</span>
           </div>
-          <div>
-            <p className="font-display text-[32px] leading-none text-slate-900">
+          <div className="min-w-0">
+            <p className="font-display text-[26px] sm:text-[32px] leading-none text-slate-900">
               Prompt2Print
             </p>
-            <p className="font-mono text-[11px] tracking-wider text-slate-500 uppercase mt-1">
+            <p className="font-mono text-[10px] sm:text-[11px] tracking-wider text-slate-500 uppercase mt-1">
               built by a teacher, for teachers
             </p>
           </div>
         </div>
-        <h1 className="font-display text-[52px] sm:text-[60px] leading-[0.95] tracking-tight text-slate-900">
+        <h1 className="font-display text-[36px] sm:text-[52px] lg:text-[60px] leading-[0.95] tracking-tight text-slate-900">
           Get your Sundays<br />
           <span className="italic text-slate-600">back.</span>
         </h1>
-        <p className="mt-8 text-slate-700 text-[17px] max-w-2xl leading-relaxed">
+        <p className="mt-6 sm:mt-8 text-slate-700 text-[15px] sm:text-[17px] max-w-2xl leading-relaxed">
           Describe the worksheet you'd normally spend an hour making. Get a print-ready PDF in under a minute — with an answer key if you need one.
         </p>
       </div>
 
-      <div className="relative max-w-6xl mx-auto px-6 pb-12">
+      {/* Generator card */}
+      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 pb-10 sm:pb-12">
         <div
           className={`relative rounded-2xl border bg-white transition-all duration-300 ${focused ? "border-slate-400 shadow-[0_0px_0px_1px_rgba(15,23,42,0.06),_0px_40px_80px_-20px_rgba(15,23,42,0.15)]" : "border-slate-300 shadow-[0_1px_0px_0px_rgba(0,0,0,0.03),_0px_30px_70px_-15px_rgba(15,23,42,0.15)]"}`}
         >
-          <div className="flex items-center justify-between px-8 pt-7 pb-3">
+          <div className="flex items-center justify-between px-5 sm:px-8 pt-5 sm:pt-7 pb-3">
             <div className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-emerald-500" />
               <label className="font-mono text-[11px] tracking-wider text-slate-600 uppercase">
@@ -279,7 +329,7 @@ function HomeInner() {
             <span className="font-mono text-xs text-slate-400">{prompt.length} chars</span>
           </div>
 
-          <div data-tour="prompt" className="px-8">
+          <div data-tour="prompt" className="px-5 sm:px-8">
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -288,18 +338,18 @@ function HomeInner() {
               autoFocus
               placeholder="e.g. Grade 6 ratios review — 8 problems mixing tables, tape diagrams, and real-world questions"
               rows={5}
-              className="!text-base sm:!text-lg lg:!text-xl leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
+              className="!text-[15px] sm:!text-lg lg:!text-xl leading-relaxed resize-none border-0 shadow-none focus-visible:ring-0 p-0 bg-transparent"
             />
           </div>
 
-          <div className="px-8 mt-2">
-            <p className="font-mono text-sm text-slate-400">
+          <div className="px-5 sm:px-8 mt-2">
+            <p className="font-mono text-xs sm:text-sm text-slate-400">
               tip: be specific — grade, topic, question count, what you want it to feel like
             </p>
           </div>
 
-          <div data-tour="templates" className="px-8 mt-5">
-            <div className="flex items-center gap-3 mb-2">
+          <div data-tour="templates" className="px-5 sm:px-8 mt-5">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
                 template
               </span>
@@ -313,7 +363,7 @@ function HomeInner() {
                   key={t.key}
                   type="button"
                   onClick={() => setTemplate(t.key)}
-                  className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm transition ${
                     template === t.key
                       ? "bg-slate-900 text-white"
                       : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -325,7 +375,7 @@ function HomeInner() {
             </div>
           </div>
 
-          <div className="px-8 mt-5">
+          <div className="px-5 sm:px-8 mt-5">
             <input
               type="file"
               ref={fileInputRef}
@@ -334,9 +384,9 @@ function HomeInner() {
               className="hidden"
             />
             {referenceFile ? (
-              <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 w-fit">
-                <div className="h-2 w-2 rounded-full bg-blue-500" />
-                <span className="font-mono text-xs text-slate-700">
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 w-fit max-w-full">
+                <div className="h-2 w-2 rounded-full bg-blue-500 flex-shrink-0" />
+                <span className="font-mono text-xs text-slate-700 truncate">
                   reference: {referenceFile.name}
                 </span>
                 <button
@@ -344,7 +394,7 @@ function HomeInner() {
                     setReferenceFile(null);
                     if (fileInputRef.current) fileInputRef.current.value = "";
                   }}
-                  className="text-slate-400 hover:text-slate-900 text-xs"
+                  className="text-slate-400 hover:text-slate-900 text-xs flex-shrink-0"
                 >
                   ✕
                 </button>
@@ -352,14 +402,14 @@ function HomeInner() {
             ) : (
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="font-mono text-sm text-slate-500 hover:text-slate-900 underline underline-offset-4 transition"
+                className="font-mono text-xs sm:text-sm text-slate-500 hover:text-slate-900 underline underline-offset-4 transition"
               >
                 + attach a reference (PDF or image, optional)
               </button>
             )}
           </div>
 
-          <div className="px-8 mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="px-5 sm:px-8 mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div data-tour="style" className="flex items-center gap-3">
               <span className="font-mono text-[11px] tracking-wider text-slate-500 uppercase">
                 style
@@ -368,7 +418,7 @@ function HomeInner() {
                 <button
                   type="button"
                   onClick={() => setStyle("rich")}
-                  className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition ${
+                  className={`px-3 sm:px-3.5 py-1.5 rounded-md text-xs sm:text-sm font-medium transition ${
                     style === "rich"
                       ? "bg-white text-slate-900 shadow-sm"
                       : "text-slate-500 hover:text-slate-900"
@@ -379,7 +429,7 @@ function HomeInner() {
                 <button
                   type="button"
                   onClick={() => setStyle("plain")}
-                  className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition ${
+                  className={`px-3 sm:px-3.5 py-1.5 rounded-md text-xs sm:text-sm font-medium transition ${
                     style === "plain"
                       ? "bg-white text-slate-900 shadow-sm"
                       : "text-slate-500 hover:text-slate-900"
@@ -400,27 +450,27 @@ function HomeInner() {
                 onChange={(e) => setAnswerKey(e.target.checked)}
                 className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
               />
-              <span className="text-sm text-slate-700">Include answer key</span>
+              <span className="text-xs sm:text-sm text-slate-700">Include answer key</span>
             </label>
           </div>
 
           <div className="mt-5 border-t border-slate-100" />
 
-          <div className="flex flex-col gap-4 px-8 py-5">
+          <div className="flex flex-col gap-4 px-5 sm:px-8 py-4 sm:py-5">
             <Button
               onClick={generateWorksheet}
               size="lg"
-              className="w-full h-[52px] text-lg font-medium bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
+              className="w-full h-[48px] sm:h-[52px] text-base sm:text-lg font-medium bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
             >
               Generate worksheet →
             </Button>
-            <p className="font-mono text-xs tracking-wider text-slate-400 uppercase">or start from an example</p>
+            <p className="font-mono text-[10px] sm:text-xs tracking-wider text-slate-400 uppercase">or start from an example</p>
             <div className="flex flex-wrap gap-2">
               {EXAMPLES.map((ex) => (
                 <button
                   key={ex}
                   onClick={() => setPrompt(ex)}
-                  className="text-sm px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300 transition"
+                  className="text-xs sm:text-sm text-left px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300 transition"
                 >
                   {ex}
                 </button>
@@ -429,12 +479,12 @@ function HomeInner() {
           </div>
         </div>
 
-        <p className="font-mono text-xs text-slate-400 text-center mt-16">
+        <p className="font-mono text-[10px] sm:text-xs text-slate-400 text-center mt-10 sm:mt-16 px-2">
           Built by a 7th-grade math teacher, for teachers who are tired of building worksheets at 10pm on a Sunday.
         </p>
 
         {/* Footer */}
-        <footer className="mt-12 pb-8 border-t border-slate-200 pt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs text-slate-400">
+        <footer className="mt-10 sm:mt-12 pb-8 border-t border-slate-200 pt-6 flex flex-wrap items-center justify-center gap-x-4 sm:gap-x-6 gap-y-2 font-mono text-xs text-slate-400">
           <span>© 2026 Prompt2Print</span>
           <button
             onClick={() => router.push("/terms")}
@@ -459,8 +509,8 @@ function HomeInner() {
 
       <style jsx global>{`
         @keyframes slideDown {
-          from { transform: translate(-50%, -20px); opacity: 0; }
-          to   { transform: translate(-50%, 0);     opacity: 1; }
+          from { transform: translateY(-20px); opacity: 0; }
+          to   { transform: translateY(0);     opacity: 1; }
         }
 
         /* Shepherd.js tour — Prompt2Print theme */
@@ -469,7 +519,7 @@ function HomeInner() {
           border: 1px solid rgb(226 232 240);
           background: white;
           box-shadow: 0 30px 80px -20px rgba(15, 23, 42, 0.25);
-          max-width: 400px;
+          max-width: min(400px, calc(100vw - 32px));
           font-family: inherit;
         }
         .p2p-shepherd .shepherd-header {
