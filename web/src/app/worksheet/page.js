@@ -295,7 +295,7 @@ function WorksheetInner() {
 
   return (
     <main className="min-h-screen bg-[color:#FAFAF6]">
-      <div className="border-b border-slate-200 bg-white/70 backdrop-blur">
+      <div className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2">
           <button onClick={() => router.push("/")} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition flex-shrink-0">
             <span className="font-mono text-xs sm:text-sm">← back</span>
@@ -359,7 +359,7 @@ function WorksheetInner() {
                 )}
               </button>
               {menuOpen && userEmail && (
-                <div className="absolute right-0 top-11 w-64 bg-white border border-slate-200 rounded-xl shadow-[0_20px_40px_-10px_rgba(15,23,42,0.2)] py-1 z-50">
+                <div className="absolute right-0 top-11 w-64 bg-white border border-slate-200 rounded-xl shadow-[0_20px_40px_-10px_rgba(15,23,42,0.2)] py-1 z-[60]">
                   <div className="px-4 pt-3 pb-2 border-b border-slate-100 mb-1 flex items-center gap-3">
                     <div className="h-9 w-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-medium text-sm flex-shrink-0">
                       {userEmail.charAt(0).toUpperCase()}
