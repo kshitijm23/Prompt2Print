@@ -413,7 +413,50 @@ function WorksheetInner() {
               </div>
             ) : pdfUrl ? (
               <>
-                <iframe src={pdfUrl} className="w-full h-[500px] sm:h-[800px] border-0 bg-white" title="Worksheet" />
+                {/* Mobile: clean card with tap-to-view button (iOS PDF iframes are broken) */}
+                <div className="sm:hidden flex flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="h-16 w-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-5">
+                    <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.75">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <p className="font-mono text-[11px] tracking-wider text-emerald-700 uppercase mb-2">
+                    ✓ Your worksheet is ready
+                  </p>
+                  <h2 className="font-display text-[26px] leading-tight text-slate-900 mb-3">
+                    Tap to view your PDF.
+                  </h2>
+                  <p className="text-slate-600 text-sm max-w-xs leading-relaxed mb-6">
+                    Opens in your browser's PDF viewer where you can scroll, zoom, and print properly.
+                  </p>
+                  <div className="flex flex-col gap-3 w-full max-w-xs">
+                    <a
+                      href={pdfUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full inline-flex items-center justify-center gap-2 h-12 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-base font-medium transition"
+                    >
+                      View PDF
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                    <a
+                      href={pdfUrl}
+                      download="worksheet.pdf"
+                      className="w-full inline-flex items-center justify-center gap-2 h-12 px-6 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-900 text-base font-medium transition"
+                    >
+                      Download PDF
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </a>
+                  </div>
+                </div>
+
+                {/* Desktop: embedded iframe */}
+                <iframe src={pdfUrl} className="hidden sm:block w-full h-[800px] border-0 bg-white" title="Worksheet" />
+
                 {isEditing && (
                   <div className="absolute inset-0 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
                     <div className="h-10 w-10 rounded-full border-2 border-slate-200 border-t-slate-900 animate-spin" />
